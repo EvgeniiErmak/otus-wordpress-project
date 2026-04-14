@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная установка на otus-master (192.168.88.168)
+# setup-master.sh — Полная исправленная установка на otus-master
 # Запуск: curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/setup-master.sh | sudo bash
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
@@ -13,20 +13,20 @@ for pkg in curl wget git unzip ca-certificates software-properties-common; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx — Reverse Proxy + Load Balancer
+# 1. Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# 2. Apache + PHP + Memcached + MySQL
-check_and_install apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
+# 2. Apache + PHP + Memcached + MySQL — принудительная установка
+log "Установка Apache, PHP, Memcached и MySQL..."
+apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Фикс ports.conf (чистая версия)
+# Фикс ports.conf
 log "Исправляем /etc/apache2/ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
-# ports.conf for backend on 8080
 Listen 8080
 
 <IfModule ssl_module>
@@ -38,7 +38,7 @@ Listen 8080
 </IfModule>
 EOF
 
-# Apache виртуальный хост
+# Apache конфиг
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -47,7 +47,7 @@ systemctl restart apache2
 enable_and_start_service apache2
 
 # Memcached
-log "Настройка Memcached (слушает все интерфейсы)..."
+log "Настройка Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
@@ -59,20 +59,20 @@ setup_mysql_master
 install_wordpress_files
 configure_wp_config
 
-# 5. Мониторинг
+# Мониторинг
 check_and_install prometheus prometheus-node-exporter grafana
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl restart grafana-server prometheus prometheus-node-exporter
 enable_and_start_service grafana-server prometheus prometheus-node-exporter
 
-# 6. ELK
+# ELK
 curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" > /etc/apt/sources.list.d/elastic-8.x.list
 apt-get update
 check_and_install elasticsearch kibana filebeat
 enable_and_start_service elasticsearch kibana
 
-# 7. Скрипты и cron
+# Скрипты и cron
 mkdir -p /usr/local/bin
 cp scripts/sync-wp-files.sh /usr/local/bin/ 2>/dev/null || true
 cp backup/backup-db.sh /usr/local/bin/ 2>/dev/null || true
@@ -80,6 +80,5 @@ chmod +x /usr/local/bin/*.sh 2>/dev/null || true
 crontab cron/jobs 2>/dev/null || true
 
 log "=== УСТАНОВКА MASTER ЗАВЕРШЕНА ==="
-log "Проверьте сервисы: systemctl status nginx apache2 memcached mysql"
-log "WordPress: http://192.168.88.168"
-log "Grafana: http://192.168.88.168:3000 (admin/admin)"
+log "Проверьте сервисы командой: systemctl status nginx apache2 memcached mysql --no-pager"
+log "WordPress должен быть доступен по http://192.168.88.168"
