@@ -22,6 +22,8 @@ enable_and_start_service nginx
 
 # 2. Apache + PHP + Memcached (Backend)
 check_and_install apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached
+
+# Настройка Apache
 sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
@@ -30,8 +32,9 @@ a2enmod proxy_fcgi setenvif rewrite
 systemctl restart apache2
 enable_and_start_service apache2
 
-# Memcached слушает все интерфейсы
-sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf
+# Memcached — теперь после установки пакета
+log "Настройка Memcached (слушает все интерфейсы)..."
+sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf || log "WARNING: Не удалось изменить memcached.conf"
 systemctl restart memcached
 enable_and_start_service memcached
 
@@ -43,13 +46,13 @@ setup_mysql_master
 install_wordpress_files
 configure_wp_config
 
-# 5. Мониторинг: Prometheus + Grafana + Node Exporter
+# 5. Мониторинг
 check_and_install prometheus prometheus-node-exporter grafana
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl restart grafana-server prometheus prometheus-node-exporter
 enable_and_start_service grafana-server prometheus prometheus-node-exporter
 
-# 6. ELK (Elasticsearch + Kibana + Filebeat)
+# 6. ELK
 curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" > /etc/apt/sources.list.d/elastic-8.x.list
 apt-get update
@@ -65,6 +68,5 @@ crontab cron/jobs 2>/dev/null || true
 
 log "=== УСТАНОВКА MASTER ЗАВЕРШЕНА УСПЕШНО ==="
 log "WordPress: http://192.168.88.168"
-log "Grafana: http://192.168.88.168:3000 (admin / admin)"
+log "Grafana: http://192.168.88.168:3000 (логин/пароль: admin/admin)"
 log "Kibana: http://192.168.88.168:5601"
-log "Prometheus: http://192.168.88.168:9090"
