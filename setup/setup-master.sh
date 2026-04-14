@@ -20,11 +20,25 @@ ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# 2. Apache + PHP + Memcached (Backend)
+# 2. Apache + PHP + Memcached
 check_and_install apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached
 
-# Настройка Apache
-sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
+# Фикс ports.conf — правильный способ для Ubuntu 24.04
+log "Исправляем /etc/apache2/ports.conf..."
+cat > /etc/apache2/ports.conf << 'EOF'
+# ports.conf — исправленная версия для backend на 8080
+Listen 8080
+
+<IfModule ssl_module>
+    Listen 443
+</IfModule>
+
+<IfModule mod_gnutls.c>
+    Listen 443
+</IfModule>
+EOF
+
+# Apache виртуальный хост
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -32,9 +46,9 @@ a2enmod proxy_fcgi setenvif rewrite
 systemctl restart apache2
 enable_and_start_service apache2
 
-# Memcached — теперь после установки пакета
-log "Настройка Memcached (слушает все интерфейсы)..."
-sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf || log "WARNING: Не удалось изменить memcached.conf"
+# Memcached
+log "Настройка Memcached..."
+sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
@@ -68,5 +82,5 @@ crontab cron/jobs 2>/dev/null || true
 
 log "=== УСТАНОВКА MASTER ЗАВЕРШЕНА УСПЕШНО ==="
 log "WordPress: http://192.168.88.168"
-log "Grafana: http://192.168.88.168:3000 (логин/пароль: admin/admin)"
-log "Kibana: http://192.168.88.168:5601"
+log "Grafana: http://192.168.88.168:3000 (admin / admin)"
+log "Проверьте: systemctl status apache2 memcached mysql nginx"
