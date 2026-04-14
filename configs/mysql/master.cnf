@@ -1,0 +1,11 @@
+# configs/mysql/master.cnf
+# MySQL Master конфигурация (на otus-master)
+
+[mysqld]
+server-id = 1
+log_bin = /var/log/mysql/mysql-bin.log
+binlog_expire_logs_seconds = 259200  # 3 дня
+expire_logs_days = 3
+bind-address = 0.0.0.0
+gtid_mode = ON
+enforce_gtid_consistency = ON

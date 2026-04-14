@@ -1,0 +1,12 @@
+# configs/grafana/provisioning/datasources/prometheus.yml
+# Автоматическое добавление Prometheus как источника данных в Grafana
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    url: http://localhost:9090
+    access: proxy
+    isDefault: true
+    editable: false

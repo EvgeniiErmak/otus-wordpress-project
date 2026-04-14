@@ -1,0 +1,10 @@
+# configs/mysql/slave.cnf
+# MySQL Slave конфигурация (на otus-slave)
+
+[mysqld]
+server-id = 2
+relay-log = /var/log/mysql/relay-bin.log
+read_only = ON
+bind-address = 0.0.0.0
+gtid_mode = ON
+enforce_gtid_consistency = ON
