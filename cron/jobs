@@ -1,11 +1,5 @@
-# cron/jobs — все cron-задания проекта
-# Устанавливаются через crontab -u root -e или скриптом
-
 # Синхронизация файлов WordPress каждые 6 часов
 0 */6 * * * /usr/local/bin/sync-wp-files.sh >> /var/log/wp-sync.log 2>&1
 
-# Бэкап БД каждый день в 3:00 ночи
+# Бэкап БД каждый день в 3:00
 0 3 * * * /usr/local/bin/backup-db.sh >> /var/log/wordpress-backup.log 2>&1
-
-# Перезапуск сервисов при необходимости (опционально)
-@daily /bin/systemctl restart nginx apache2 memcached
