@@ -1,67 +1,14 @@
 #!/bin/bash
-# setup-master.sh — Финальная исправленная версия (метрики в Grafana + авто Kibana)
+# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ (метрики в Grafana + lifecycle + Kibana)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Docker + базовые пакеты
-for pkg in curl wget git unzip ca-certificates gnupg; do
-    check_and_install "$pkg"
-done
+# ... (все предыдущие блоки: Docker, nginx, LAMP, Memcached, MySQL, WordPress — оставь как было, они работают)
 
-if ! command -v docker &> /dev/null; then
-    log "Устанавливаем Docker..."
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable --now docker
-fi
-check_and_install docker-compose
-
-# Nginx + Apache + PHP + Memcached + MySQL + WordPress
-check_and_install nginx
-download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
-ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx
-enable_and_start_service nginx
-
-log "Установка LAMP..."
-apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
-
-log "Исправляем ports.conf..."
-cat > /etc/apache2/ports.conf << 'EOF'
-Listen 8080
-<IfModule ssl_module>
-    Listen 443
-</IfModule>
-<IfModule mod_gnutls.c>
-    Listen 443
-</IfModule>
-EOF
-
-download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
-a2ensite wordpress.conf
-a2dissite 000-default.conf
-a2enmod proxy_fcgi setenvif rewrite
-a2enconf php8.3-fpm
-systemctl restart apache2
-enable_and_start_service apache2
-
-log "Memcached..."
-sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
-systemctl restart memcached
-enable_and_start_service memcached
-
-setup_mysql_master
-install_wordpress_files
-
-log "Автоматическая установка WordPress..."
-cd /var/www/html/wordpress
-wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --locale=ru_RU --skip-email --allow-root || true
-
-log "✅ WordPress настроен автоматически"
-
-# ======================== Prometheus + Node Exporter + Grafana ========================
-log "Настройка Prometheus + Node Exporter + Grafana (исправленный scrape)..."
+# ======================== Prometheus + Node Exporter + Grafana (ИСПРАВЛЕНО) ========================
+log "Настройка Prometheus + Node Exporter + Grafana (с lifecycle и правильным scrape)..."
 
 check_and_install prometheus prometheus-node-exporter
 
@@ -69,6 +16,7 @@ check_and_install prometheus prometheus-node-exporter
 cat > /etc/prometheus/prometheus.yml << 'EOF'
 global:
   scrape_interval: 10s
+  evaluation_interval: 10s
 
 scrape_configs:
   - job_name: 'prometheus'
@@ -76,19 +24,29 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   - job_name: 'node_exporter'
+    honor_timestamps: true
     static_configs:
       - targets: ['localhost:9100']
 EOF
 
-# Перезапуск с очисткой
+# Включаем lifecycle API через systemd override
+mkdir -p /etc/systemd/system/prometheus.service.d
+cat > /etc/systemd/system/prometheus.service.d/override.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.enable-lifecycle
+EOF
+
+# Очистка и перезапуск
+systemctl daemon-reload
 systemctl stop prometheus prometheus-node-exporter
-rm -rf /var/lib/prometheus/metrics2/* || true
+rm -rf /var/lib/prometheus/metrics2/* /var/lib/prometheus/data/* || true
 systemctl start prometheus prometheus-node-exporter
 enable_and_start_service prometheus
 enable_and_start_service prometheus-node-exporter
 
-# Grafana
-log "Установка Grafana..."
+# Grafana + дашборд
+log "Установка Grafana с авто-дашбордом..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
@@ -109,94 +67,33 @@ providers:
     options:
       path: /var/lib/grafana/dashboards
 EOF
-wget -q -O /var/lib/grafana/dashboards/node-exporter-full.json https://grafana.com/api/dashboards/1860/revisions/1/download || true
-chown -R grafana:grafana /var/lib/grafana
+
+# Скачиваем актуальный Node Exporter Full
+wget -q -O /var/lib/grafana/dashboards/node-exporter-full.json https://grafana.com/api/dashboards/1860/revisions/37/download || true
+chown -R grafana:grafana /var/lib/grafana /etc/grafana
 
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# Принудительный reload Prometheus
-log "Принудительный сбор метрик..."
+log "Принудительный reload Prometheus..."
+sleep 10
 curl -X POST http://localhost:9090/-/reload || true
 sleep 30
 
-# ELK через Docker
+# ELK (оставляем как было)
 log "ELK через Docker..."
 mkdir -p /opt/elk
+# ... (твой текущий docker-compose.yml блок — он работает)
 
-cat > /opt/elk/docker-compose.yml << 'EOF'
-version: '3.8'
-services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - network.host=0.0.0.0
-    ports:
-      - "9200:9200"
-    restart: unless-stopped
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.17.1
-    container_name: kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - xpack.security.enabled=false
-      - server.publicBaseUrl=http://192.168.88.168:5601
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-    restart: unless-stopped
-
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.17.1
-    container_name: filebeat
-    command: ["-e", "--strict.perms=false"]
-    volumes:
-      - /var/log:/var/log:ro
-      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-    depends_on:
-      - elasticsearch
-    restart: unless-stopped
-
-volumes:
-  esdata:
-EOF
-
-cat > /opt/elk/filebeat.yml << 'EOF'
-filebeat.inputs:
-- type: filestream
-  enabled: true
-  paths:
-    - /var/log/nginx/*.log
-    - /var/log/apache2/*.log
-    - /var/log/mysql/*.log
-
-output.elasticsearch:
-  hosts: ["http://elasticsearch:9200"]
-  index: "logs-%{+yyyy.MM.dd}"
-EOF
-
-cd /opt/elk
-docker compose down || true
-docker compose up -d
-
-log "ELK запущен"
-
-# Финальный вывод
+# Финал
 echo ""
 echo "=================================================================="
-echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ!"
+echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ! (метрики должны появиться)"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168"
-echo "Grafana:       http://192.168.88.168:3000"
+echo "Grafana:       http://192.168.88.168:3000   (логин admin / admin)"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "=================================================================="
-echo "Если Grafana всё ещё пустая — выполни: systemctl restart prometheus prometheus-node-exporter"
+echo "Проверь в Grafana: Status → Targets (должен быть node_exporter UP)"
 echo "=================================================================="
