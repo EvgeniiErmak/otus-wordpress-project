@@ -1,11 +1,11 @@
 #!/bin/bash
-# setup-master.sh — Максимально надёжная версия с ELK через зеркало
+# setup-master.sh — Финальная версия с прямой установкой Kibana через .deb
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Удаляем все старые Elastic репозитории
+# Удаляем старые Elastic репозитории
 rm -f /etc/apt/sources.list.d/elastic*.list /etc/apt/sources.list.d/elasticrepo.list
 
 apt-get update && apt-get upgrade -y
@@ -74,20 +74,26 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK через зеркало elasticrepo.serveradmin.ru ========================
-log "Установка ELK Stack через зеркало elasticrepo.serveradmin.ru..."
+# ======================== ELK — только Elasticsearch + Filebeat через apt, Kibana + Logstash через .deb ========================
+log "Установка Elasticsearch и Filebeat через зеркало..."
 
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
 
-apt-get update || log "WARNING: apt update с зеркалом завершился с предупреждением"
+apt-get update || log "WARNING: apt update с зеркалом Elastic"
 
-# Явная установка всех пакетов ELK
-log "Устанавливаем elasticsearch kibana logstash filebeat..."
-apt-get install -y elasticsearch kibana logstash filebeat
+apt-get install -y elasticsearch filebeat
 
-# Создаём директории на всякий случай
-mkdir -p /etc/kibana /etc/logstash/conf.d /etc/filebeat
+# Kibana и Logstash через прямой .deb (чтобы избежать проблем)
+log "Установка Kibana и Logstash через .deb пакеты..."
+
+cd /tmp
+wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb -O kibana.deb
+wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb -O logstash.deb
+
+dpkg -i kibana.deb || apt-get install -f -y
+dpkg -i logstash.deb || apt-get install -f -y
+rm -f kibana.deb logstash.deb
 
 # Конфигурация ELK
 log "Настройка конфигурации ELK..."
@@ -129,7 +135,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен"
+log "ELK установлен (Kibana и Logstash через .deb)"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
