@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-slave.sh — ПОЛНОСТЬЮ АВТОМАТИЧЕСКАЯ УСТАНОВКА SLAVE (без ручного ввода)
+# setup-slave.sh — ИСПРАВЛЕННАЯ ПОЛНОСТЬЮ АВТОМАТИЧЕСКАЯ ВЕРСИЯ
 
 set -euo pipefail
 
@@ -7,12 +7,12 @@ source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress
 
 MASTER_IP="192.168.88.168"
 REPL_PASSWORD="ReplPassword2026Strong!"
-MASTER_ROOT_PASSWORD="292799619531629514"
+MASTER_ROOT_PASSWORD="292799619531629514"   # ←←← ОБЯЗАТЕЛЬНО ИЗМЕНИ НА РЕАЛЬНЫЙ ПАРОЛЬ ROOT ОТ MASTER
 
 log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
-for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass; do
+# Базовые пакеты
+for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
     check_and_install "$pkg"
 done
 
@@ -23,11 +23,9 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== SSH КЛЮЧИ (полностью автоматически) ========================
-log "Настройка автоматического SSH-доступа к master (с паролем)..."
-
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
+# ======================== SSH КЛЮЧ (автоматически) ========================
+log "Настройка SSH-ключа к master..."
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
 if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
@@ -35,28 +33,26 @@ fi
 
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 
-# Автоматическое копирование ключа с использованием пароля
-log "Копируем SSH-ключ на master автоматически..."
+log "Копируем ключ на master автоматически..."
 sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
 
-# Проверка, что ключ работает
 if ssh -o BatchMode=yes -o ConnectTimeout=10 root@$MASTER_IP "exit" 2>/dev/null; then
-    log "✅ SSH ключ успешно установлен на master"
+    log "✅ SSH ключ успешно установлен"
 else
-    log "⚠️  Не удалось установить SSH ключ автоматически. Проверьте пароль MASTER_ROOT_PASSWORD в скрипте."
+    log "⚠️ Не удалось подключиться по ключу. Проверьте MASTER_ROOT_PASSWORD в скрипте."
 fi
 
-# ======================== NGINX + LAMP ========================
-log "Настройка Nginx..."
-check_and_install nginx
-download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
-ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx
-enable_and_start_service nginx
+# ======================== FIREWALL ========================
+log "Настройка firewall (ufw)..."
+ufw allow 22
+ufw allow 80
+ufw allow 8080
+ufw allow 9100
+ufw --force enable || true
 
-log "Установка LAMP..."
-apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
-    php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached
+# ======================== NGINX + LAMP ========================
+log "Nginx + Apache..."
+check_and_install nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached
 
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
@@ -68,7 +64,7 @@ a2dissite 000-default.conf
 a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.3-fpm
 systemctl restart apache2
-enable_and_start_service apache2
+enable_and_start_service apache2 nginx
 
 log "Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
@@ -76,28 +72,25 @@ systemctl restart memcached
 enable_and_start_service memcached
 
 # ======================== MySQL SLAVE ========================
-log "Настройка MySQL Slave..."
+log "MySQL Slave + репликация..."
 check_and_install mysql-server
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
+
 systemctl restart mysql
 enable_and_start_service mysql
 
-log "Настройка репликации..."
+log "Запуск репликации..."
 mysql -e "
 STOP SLAVE;
-CHANGE MASTER TO
-  MASTER_HOST='$MASTER_IP',
-  MASTER_USER='repl',
-  MASTER_PASSWORD='$REPL_PASSWORD',
-  MASTER_AUTO_POSITION=1;
+CHANGE MASTER TO MASTER_HOST='$MASTER_IP', MASTER_USER='repl', MASTER_PASSWORD='$REPL_PASSWORD', MASTER_AUTO_POSITION=1;
 START SLAVE;
-" 2>/dev/null || true
+" || true
 
 sleep 5
-mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
+mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running|Last_Error" || true
 
-# ======================== WordPress + Автосинхронизация ========================
-log "Установка и синхронизация WordPress..."
+# ======================== WordPress + синхронизация ========================
+log "WordPress + автосинхронизация..."
 install_wordpress_files
 
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
@@ -109,15 +102,13 @@ EOF
 chmod +x /usr/local/bin/sync-wp-files.sh
 
 /usr/local/bin/sync-wp-files.sh || true
-
-# Cron каждые 5 минут
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-# ======================== MONITORING + FILEBEAT ========================
+# ======================== MONITORING ========================
+log "Node Exporter + Filebeat..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-log "Filebeat..."
 mkdir -p /opt/filebeat
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
 version: '3.8'
@@ -150,16 +141,15 @@ docker compose up -d
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
-echo "✅ SLAVE УСТАНОВЛЕН ПОЛНОСТЬЮ АВТОМАТИЧЕСКИ!"
+echo "✅ SLAVE УСТАНОВЛЕН АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
-echo "WordPress:                 http://192.168.88.168"
-echo "MySQL Slave:               репликация запущена"
-echo "Автосинхронизация файлов:  каждые 5 минут"
-echo "Node Exporter:             http://192.168.88.167:9100/metrics"
-echo "Filebeat:                  логи отправляются на master"
+echo "WordPress:     http://192.168.88.168"
+echo "Grafana:       http://192.168.88.168:3000"
+echo "Kibana:        http://192.168.88.168:5601"
+echo "Node Exporter (slave): http://192.168.88.167:9100/metrics"
 echo ""
-echo "Проверить репликацию:"
+echo "Проверь репликацию:"
 echo "   mysql -e 'SHOW SLAVE STATUS\G;'"
 echo "=================================================================="
 
-log "Slave установка завершена полностью автоматически."
+log "Slave установка завершена."
