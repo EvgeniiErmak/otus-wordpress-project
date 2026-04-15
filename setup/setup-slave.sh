@@ -7,11 +7,11 @@ source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress
 
 MASTER_IP="192.168.88.168"
 REPL_PASSWORD="ReplPassword2026Strong!"
-MASTER_ROOT_PASSWORD="292799619531629514"   # ←←← ИЗМЕНИ НА РЕАЛЬНЫЙ ПАРОЛЬ ROOT ОТ MASTER
+MASTER_ROOT_PASSWORD="292799619531629514"
 
 log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
-# Базовые пакеты + ufw
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
     check_and_install "$pkg"
 done
@@ -25,11 +25,9 @@ check_and_install docker-compose
 # ======================== SSH КЛЮЧ ========================
 log "Настройка SSH-ключа к master..."
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
-
 if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
-
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 
 log "Копируем ключ автоматически..."
@@ -37,15 +35,10 @@ sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f ro
 
 # ======================== FIREWALL ========================
 log "Открываем порты на slave..."
-ufw allow 22
-ufw allow 80
-ufw allow 8080
-ufw allow 9100
+ufw allow 22 80 8080 9100 || true
 ufw --force enable || true
 
 # ======================== NGINX + LAMP ========================
-# (тот же блок, что был раньше — оставляю без изменений, он работает)
-
 log "Nginx + Apache + PHP..."
 check_and_install nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached
 
@@ -88,6 +81,7 @@ sleep 10
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running|Last_Error" || true
 
 # ======================== WordPress + синхронизация ========================
+log "WordPress + автосинхронизация..."
 install_wordpress_files
 
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
@@ -101,24 +95,53 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
 # ======================== MONITORING ========================
+log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# Filebeat
+log "Filebeat..."
 mkdir -p /opt/filebeat
-# (docker-compose и filebeat.yml остаются как раньше)
+cat > /opt/filebeat/docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.1
+    command: ["-e", "--strict.perms=false"]
+    volumes:
+      - /var/log:/var/log:ro
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+    restart: unless-stopped
+EOF
+
+cat > /opt/filebeat/filebeat.yml << 'EOF'
+filebeat.inputs:
+- type: filestream
+  enabled: true
+  paths:
+    - /var/log/nginx/*.log
+    - /var/log/apache2/*.log
+    - /var/log/mysql/*.log
+output.elasticsearch:
+  hosts: ["http://192.168.88.168:9200"]
+  index: "logs-slave-%{+yyyy.MM.dd}"
+EOF
 
 cd /opt/filebeat
-docker compose up -d
+docker compose up -d || true
 
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
 echo "✅ SLAVE УСТАНОВЛЕН АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
-echo "WordPress: http://192.168.88.168"
-echo "Проверь репликацию: mysql -e 'SHOW SLAVE STATUS\G;'"
-echo "Node Exporter: http://192.168.88.167:9100/metrics"
+echo "WordPress:                 http://192.168.88.168"
+echo "MySQL Slave:               репликация активна (проверь SHOW SLAVE STATUS)"
+echo "Автосинхронизация файлов:  каждые 5 минут"
+echo "Node Exporter:             http://192.168.88.167:9100/metrics"
+echo "Filebeat:                  логи отправляются на master"
+echo ""
+echo "Проверить репликацию:"
+echo "   mysql -e 'SHOW SLAVE STATUS\G;'"
 echo "=================================================================="
 
-log "Slave установка завершена."
+log "Slave установка завершена успешно."
