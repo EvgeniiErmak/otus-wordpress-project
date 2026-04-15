@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Максимально агрессивная версия для Elasticsearch 9.x (lock + cleanup)
+# setup-master.sh — Жёсткая версия с полной очисткой node.lock для Elasticsearch 9.x
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -12,7 +12,7 @@ for pkg in curl wget git unzip ca-certificates software-properties-common gnupg 
     check_and_install "$pkg"
 done
 
-# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (без изменений)
+# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (оставляем как есть)
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -78,8 +78,8 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — агрессивная очистка lock + single-node ========================
-log "Установка ELK с агрессивной очисткой lock-файлов..."
+# ======================== ELK — ЖЁСТКАЯ ОЧИСТКА LOCK ========================
+log "Установка ELK с жёсткой очисткой node.lock..."
 
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
@@ -91,11 +91,12 @@ apt-get install -y elasticsearch filebeat
 echo "vm.max_map_count=262144" > /etc/sysctl.d/99-elasticsearch.conf
 sysctl -p /etc/sysctl.d/99-elasticsearch.conf
 
-# Агрессивная очистка ВСЕХ lock и данных
-log "Полная очистка lock-файлов и данных Elasticsearch..."
+# Жёсткая очистка ВСЕХ lock и данных
+log "Жёсткая очистка lock-файлов и данных..."
 systemctl stop elasticsearch kibana logstash filebeat || true
 rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock /var/log/elasticsearch/* /tmp/elasticsearch* || true
 chown -R elasticsearch:elasticsearch /var/lib/elasticsearch /var/log/elasticsearch
+chmod -R 755 /var/lib/elasticsearch
 
 # Чистый single-node конфиг
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -135,19 +136,19 @@ output.elasticsearch:
 EOF
 
 # Запуск
-log "Запускаем ELK сервисы после очистки..."
+log "Запускаем ELK после жёсткой очистки..."
 systemctl daemon-reload
 enable_and_start_service elasticsearch
 enable_and_start_service kibana || true
 enable_and_start_service logstash || true
 enable_and_start_service filebeat || true
 
-sleep 10
+sleep 12
 if curl -s http://localhost:9200 > /dev/null; then
-    log "✅ Elasticsearch запущен"
+    log "✅ Elasticsearch запущен успешно!"
 else
-    log "⚠️ Elasticsearch всё ещё не запустился. Журнал:"
-    journalctl -u elasticsearch -n 30
+    log "⚠️ Elasticsearch не запустился. Полный журнал:"
+    journalctl -u elasticsearch -n 100
 fi
 
 log "ELK настроен"
@@ -160,4 +161,6 @@ echo "=================================================================="
 echo "WordPress: http://192.168.88.168 (admin / AdminPassword2026Strong!)"
 echo "Grafana:   http://192.168.88.168:3000 (admin / admin)"
 echo "Kibana:    http://192.168.88.168:5601"
+echo "=================================================================="
+echo "Если Elasticsearch не запустился — journalctl -u elasticsearch -n 100"
 echo "=================================================================="
