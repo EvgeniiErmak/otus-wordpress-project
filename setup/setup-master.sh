@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная версия со всеми компонентами (ELK через прямые .deb)
+# setup-master.sh — Полная установка на MASTER со всеми компонентами (ELK через .deb 8.17.1)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -7,15 +7,12 @@ log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
 apt-get update && apt-get upgrade -y
 
-# Базовые пакеты
+# Базовые пакеты + Java для ELK
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
 
-# Удаляем старый Elastic репозиторий, чтобы избежать 403
-rm -f /etc/apt/sources.list.d/elastic-8.x.list
-
-# 1. Nginx
+# 1. Nginx Reverse Proxy
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -54,7 +51,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL
+# MySQL Master
 setup_mysql_master
 
 # WordPress
@@ -75,29 +72,23 @@ systemctl restart grafana-server
 enable_and_start_service grafana-server
 
 # ======================== ELK через прямые .deb 8.17.1 ========================
-log "Установка ELK Stack через прямые .deb пакеты 8.17.1..."
+log "Установка ELK Stack (8.17.1) через прямые .deb пакеты..."
 
 cd /tmp
 
-log "Скачиваем пакеты ELK (если отсутствуют)..."
-[ ! -f elasticsearch-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
-[ ! -f kibana-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
-[ ! -f logstash-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
-[ ! -f filebeat-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
+log "Скачиваем пакеты ELK..."
+wget -q -N https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
+wget -q -N https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
+wget -q -N https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
+wget -q -N https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
 
-log "Устанавливаем Elasticsearch..."
+log "Устанавливаем пакеты..."
 dpkg -i elasticsearch-8.17.1-amd64.deb || apt-get install -f -y
-
-log "Устанавливаем Kibana..."
 dpkg -i kibana-8.17.1-amd64.deb || apt-get install -f -y
-
-log "Устанавливаем Logstash..."
 dpkg -i logstash-8.17.1-amd64.deb || apt-get install -f -y
-
-log "Устанавливаем Filebeat..."
 dpkg -i filebeat-8.17.1-amd64.deb || apt-get install -f -y
 
-# Конфигурация ELK
+# Простая конфигурация без security
 log "Настройка конфигурации ELK..."
 
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -137,7 +128,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен успешно"
+log "ELK установлен"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
