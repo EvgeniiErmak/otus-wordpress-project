@@ -1,13 +1,12 @@
 #!/bin/bash
-# setup-master.sh — Полная установка на MASTER с ELK через зеркало elasticrepo.serveradmin.ru
+# setup-master.sh — Полная установка на MASTER (ELK через зеркало serveradmin.ru)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Принудительно удаляем старый Elastic репозиторий
-rm -f /etc/apt/sources.list.d/elastic*.list /etc/apt/sources.list.d/elasticrepo.list
-log "Старые Elastic репозитории удалены"
+# Удаляем старые Elastic репозитории
+rm -f /etc/apt/sources.list.d/elastic*.list
 
 apt-get update && apt-get upgrade -y
 
@@ -16,7 +15,7 @@ for pkg in curl wget git unzip ca-certificates software-properties-common gnupg 
     check_and_install "$pkg"
 done
 
-# 1. Nginx Reverse Proxy
+# 1. Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -55,7 +54,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Master
+# MySQL
 setup_mysql_master
 
 # WordPress
@@ -78,17 +77,15 @@ enable_and_start_service grafana-server
 # ======================== ELK через зеркало elasticrepo.serveradmin.ru ========================
 log "Установка ELK Stack через зеркало elasticrepo.serveradmin.ru..."
 
-# Импорт ключа зеркала
+# Добавляем зеркало
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add -
-
-# Добавление репозитория (для Ubuntu 24.04 — используем bookworm как ближайший)
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
 
 apt-get update || log "WARNING: apt update с зеркалом Elastic завершился с предупреждением"
 
 check_and_install elasticsearch kibana logstash filebeat
 
-# Простая конфигурация ELK (без security для теста)
+# Конфигурация ELK (простая, без security)
 log "Настройка конфигурации ELK..."
 
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -128,7 +125,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен через зеркало elasticrepo.serveradmin.ru"
+log "ELK установлен через зеркало"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
@@ -151,5 +148,5 @@ echo ""
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "MySQL wpuser: wpuser / WpPassword2026Strong!"
 echo "=================================================================="
-echo "Все компоненты (включая ELK) установлены."
+echo "Все компоненты по схеме установлены."
 echo "=================================================================="
