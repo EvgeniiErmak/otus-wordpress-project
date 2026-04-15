@@ -1,6 +1,5 @@
 #!/bin/bash
 # common-functions.sh — Общие функции для OTUS WordPress Project
-# Idempotent, логирование, автоматическая установка WordPress
 
 set -euo pipefail
 
@@ -50,7 +49,7 @@ setup_mysql_master() {
     mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
     systemctl restart mysql
     enable_and_start_service mysql
-    log "MySQL Master настроен. Пользователи wpuser и repl созданы."
+    log "MySQL Master настроен."
 }
 
 install_wordpress_files() {
@@ -68,7 +67,6 @@ install_wordpress_files() {
 
 auto_install_wordpress() {
     log "Выполняем ПОЛНОСТЬЮ АВТОМАТИЧЕСКУЮ установку WordPress..."
-
     WP_DIR="/var/www/html/wordpress"
     SITE_URL="http://192.168.88.168"
     SITE_TITLE="Мой личный блог / Портфолио"
@@ -76,7 +74,6 @@ auto_install_wordpress() {
     ADMIN_PASS="AdminPassword2026Strong!"
     ADMIN_EMAIL="admin@example.com"
 
-    # wp-cli
     curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
@@ -90,6 +87,8 @@ auto_install_wordpress() {
         --skip-email --allow-root 2>/dev/null || log "WordPress уже был установлен ранее"
 
     log "✅ WordPress установлен АВТОМАТИЧЕСКИ!"
+    log "   Логин:    $ADMIN_USER"
+    log "   Пароль:   $ADMIN_PASS"
 }
 
 log "=== common-functions загружены ==="
