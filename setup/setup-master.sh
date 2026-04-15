@@ -1,7 +1,5 @@
 #!/bin/bash
-# =====================================================
-# setup-master.sh — ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ (Grafana теперь показывает данные)
-# =====================================================
+# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ОТЧЁТОМ В КОНЦЕ
 
 set -euo pipefail
 
@@ -29,11 +27,12 @@ ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# ======================== LAMP ========================
-log "Установка LAMP..."
-apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
+# ======================== LAMP + Memcached + MySQL ========================
+log "Установка LAMP стека..."
+apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
+    php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-log "Исправляем ports.conf..."
+log "Исправляем Apache ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
@@ -46,7 +45,7 @@ a2enconf php8.3-fpm
 systemctl restart apache2
 enable_and_start_service apache2
 
-log "Memcached..."
+log "Настройка Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
@@ -56,7 +55,15 @@ install_wordpress_files
 
 log "Автоматическая установка WordPress..."
 cd /var/www/html/wordpress
-wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --locale=ru_RU --skip-email --allow-root || true
+wp core install --url="http://192.168.88.168" \
+    --title="Мой личный блог" \
+    --admin_user="admin" \
+    --admin_password="AdminPassword2026Strong!" \
+    --admin_email="admin@example.com" \
+    --locale=ru_RU \
+    --skip-email \
+    --allow-root || true
+
 log "✅ WordPress настроен автоматически"
 
 # ======================== PROMETHEUS + GRAFANA ========================
@@ -69,12 +76,10 @@ global:
   scrape_interval: 10s
 scrape_configs:
   - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
+    static_configs: [{targets: ['localhost:9090']}]
   - job_name: 'node_exporter'
     honor_timestamps: true
-    static_configs:
-      - targets: ['localhost:9100']
+    static_configs: [{targets: ['localhost:9100']}]
 EOF
 
 mkdir -p /etc/systemd/system/prometheus.service.d
@@ -86,12 +91,12 @@ EOF
 
 systemctl daemon-reload
 systemctl stop prometheus prometheus-node-exporter
-rm -rf /var/lib/prometheus/metrics2/* /var/lib/prometheus/data/* || true
+rm -rf /var/lib/prometheus/* || true
 systemctl start prometheus prometheus-node-exporter
 enable_and_start_service prometheus
 enable_and_start_service prometheus-node-exporter
 
-# Grafana
+# Grafana + простой дашборд
 log "Установка Grafana..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
@@ -102,7 +107,6 @@ download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/
 
 mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
 
-# Простой надёжный дашборд (без проблемных переменных)
 cat > /etc/grafana/provisioning/dashboards/otus-simple.yml << 'EOF'
 apiVersion: 1
 providers:
@@ -110,43 +114,20 @@ providers:
     orgId: 1
     folder: ''
     type: file
-    disableDeletion: false
-    editable: true
     options:
       path: /var/lib/grafana/dashboards
 EOF
 
-cat > /var/lib/grafana/dashboards/otus-node-exporter-simple.json << 'EOF'
+cat > /var/lib/grafana/dashboards/otus-node-simple.json << 'EOF'
 {
-  "id": null,
   "title": "OTUS Node Exporter Simple",
-  "tags": ["node", "linux"],
   "panels": [
-    {
-      "type": "stat",
-      "title": "CPU Busy Now",
-      "fieldConfig": { "defaults": { "unit": "percent" } },
-      "targets": [{ "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\",job=\"node_exporter\"}[5m])) * 100)", "refId": "A" }]
-    },
-    {
-      "type": "stat",
-      "title": "Used RAM Memory",
-      "fieldConfig": { "defaults": { "unit": "bytes" } },
-      "targets": [{ "expr": "node_memory_MemTotal_bytes{job=\"node_exporter\"} - node_memory_MemAvailable_bytes{job=\"node_exporter\"}", "refId": "A" }]
-    },
-    {
-      "type": "stat",
-      "title": "System Load (5m)",
-      "targets": [{ "expr": "node_load5{job=\"node_exporter\"}", "refId": "A" }]
-    },
-    {
-      "type": "stat",
-      "title": "Uptime",
-      "fieldConfig": { "defaults": { "unit": "s" } },
-      "targets": [{ "expr": "node_time_seconds{job=\"node_exporter\"} - node_boot_time_seconds{job=\"node_exporter\"}", "refId": "A" }]
-    }
+    {"type":"stat","title":"CPU Usage %","targets":[{"expr":"100 - avg(irate(node_cpu_seconds_total{mode=\"idle\",job=\"node_exporter\"}[5m])) * 100"}]},
+    {"type":"stat","title":"Used RAM (GB)","targets":[{"expr":"(node_memory_MemTotal_bytes{job=\"node_exporter\"} - node_memory_MemAvailable_bytes{job=\"node_exporter\"}) / 1024 / 1024 / 1024"}]},
+    {"type":"stat","title":"System Load 5m","targets":[{"expr":"node_load5{job=\"node_exporter\"}"}]},
+    {"type":"stat","title":"Uptime (days)","targets":[{"expr":"(node_time_seconds{job=\"node_exporter\"} - node_boot_time_seconds{job=\"node_exporter\"}) / 86400"}]}
   ],
-  "time": { "from": "now-1h", "to": "now" }
+  "time": {"from":"now-1h","to":"now"}
 }
 EOF
 
@@ -154,8 +135,6 @@ chown -R grafana:grafana /var/lib/grafana /etc/grafana
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-log "Принудительный reload Prometheus..."
-sleep 10
 curl -X POST http://localhost:9090/-/reload || true
 sleep 30
 
@@ -212,14 +191,39 @@ docker compose up -d
 
 log "ELK запущен"
 
+# ======================== ПОЛНЫЙ ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
-echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ!"
+echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress:     http://192.168.88.168"
-echo "Grafana:       http://192.168.88.168:3000   (admin / admin)"
-echo "Kibana:        http://192.168.88.168:5601"
-echo "Elasticsearch: http://192.168.88.168:9200"
+echo "Система готова к использованию."
+echo ""
+echo "=== ДОСТУП К КОМПОНЕНТАМ ==="
+echo "WordPress (сайт):     http://192.168.88.168"
+echo "   Логин:   admin"
+echo "   Пароль:  AdminPassword2026Strong!"
+echo ""
+echo "Grafana (мониторинг): http://192.168.88.168:3000"
+echo "   Логин:   admin"
+echo "   Пароль:  admin"
+echo "   Дашборд: OTUS Node Exporter Simple"
+echo ""
+echo "Kibana (логи):        http://192.168.88.168:5601"
+echo ""
+echo "Elasticsearch:        http://192.168.88.168:9200"
+echo ""
+echo "MySQL (wpuser):"
+echo "   Пользователь: wpuser"
+echo "   Пароль:       WpPassword2026Strong!"
+echo ""
+echo "=== Дополнительно ==="
+echo "• Prometheus:         http://192.168.88.168:9090"
+echo "• Node Exporter:      http://192.168.88.168:9100/metrics"
+echo ""
 echo "=================================================================="
-echo "В Grafana теперь дашборд 'OTUS Node Exporter Simple' — он работает."
+echo "Если нужно восстановить БД из бэкапа:"
+echo "   mysql wordpress < /var/backups/wordpress_*.sql"
+echo "   /usr/local/bin/sync-wp-files.sh"
 echo "=================================================================="
+
+log "Master восстановлен успешно с полным отчётом."
