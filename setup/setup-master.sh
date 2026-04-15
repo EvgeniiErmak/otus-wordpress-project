@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная автоматическая настройка (WordPress + Grafana дашборд + ELK)
+# setup-master.sh — Финальная версия с полной автоматической настройкой
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -25,7 +25,7 @@ nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
 # Apache + PHP + Memcached + MySQL
-log "Установка LAMP стека..."
+log "Установка LAMP..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 log "Исправляем ports.conf..."
@@ -52,53 +52,17 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Master
+# MySQL + WordPress (полная автоустановка)
 setup_mysql_master
-
-# WordPress — ПОЛНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА
 install_wordpress_files
 
-log "Автоматическая настройка WordPress (язык русский, сайт, админ)..."
+log "Автоматическая установка WordPress..."
 cd /var/www/html/wordpress
+wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --locale=ru_RU --skip-email --allow-root || true
 
-# Создаём wp-config.php с правильными параметрами
-cat > wp-config.php << 'EOF'
-<?php
-define('DB_NAME', 'wordpress');
-define('DB_USER', 'wpuser');
-define('DB_PASSWORD', 'WpPassword2026Strong!');
-define('DB_HOST', 'localhost');
-define('DB_CHARSET', 'utf8mb4');
-define('DB_COLLATE', '');
+log "✅ WordPress полностью настроен автоматически"
 
-define('AUTH_KEY',         'put your unique phrase here');
-define('SECURE_AUTH_KEY',  'put your unique phrase here');
-define('LOGGED_IN_KEY',    'put your unique phrase here');
-define('NONCE_KEY',        'put your unique phrase here');
-define('AUTH_SALT',        'put your unique phrase here');
-define('SECURE_AUTH_SALT', 'put your unique phrase here');
-define('LOGGED_IN_SALT',   'put your unique phrase here');
-define('NONCE_SALT',       'put your unique phrase here');
-
-define('WP_DEBUG', false);
-define('WP_CACHE', true);
-
-$table_prefix = 'wp_';
-
-define('WP_LANG', 'ru_RU');
-
-if ( !defined('ABSPATH') )
-    define('ABSPATH', dirname(__FILE__) . '/');
-
-require_once ABSPATH . 'wp-settings.php';
-EOF
-
-# Запускаем wp-cli для автоматической установки
-wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --skip-email --allow-root || true
-
-log "✅ WordPress настроен автоматически (русский язык, сайт создан)"
-
-# Grafana + авто-дашборд
+# Grafana + авто-дашборд + перезапуск для данных
 check_and_install prometheus prometheus-node-exporter
 log "Grafana с авто-дашбордом..."
 cd /tmp
@@ -123,11 +87,11 @@ providers:
 EOF
 wget -q -O /var/lib/grafana/dashboards/node-exporter-full.json https://grafana.com/api/dashboards/1860/revisions/1/download || true
 chown -R grafana:grafana /var/lib/grafana
-systemctl daemon-reload
-systemctl restart grafana-server
+
+systemctl restart prometheus prometheus-node-exporter grafana-server
 enable_and_start_service grafana-server
 
-# ELK через Docker (остаётся как в предыдущей версии)
+# ELK через Docker
 log "ELK через Docker..."
 mkdir -p /opt/elk
 cat > /opt/elk/docker-compose.yml << 'EOF'
@@ -140,22 +104,17 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
     restart: unless-stopped
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.17.1
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - xpack.security.enabled=false
     ports:
       - "5601:5601"
     depends_on:
@@ -202,10 +161,9 @@ echo "=================================================================="
 echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
-echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд Node Exporter)"
+echo "Grafana:       http://192.168.88.168:3000  admin / admin"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "=================================================================="
-echo "WordPress установлен с русским языком и готовым сайтом."
-echo "Grafana дашборд настроен автоматически."
+echo "Подожди 1-2 минуты — данные в Grafana дашборде должны появиться."
 echo "=================================================================="
