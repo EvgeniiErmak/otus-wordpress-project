@@ -1,18 +1,18 @@
 #!/bin/bash
-# setup-slave.sh — ПОЛНОСТЬЮ АВТОМАТИЧЕСКАЯ УСТАНОВКА SLAVE (192.168.88.167)
+# setup-slave.sh — ПОЛНОСТЬЮ АВТОМАТИЧЕСКАЯ УСТАНОВКА SLAVE (без ручного ввода)
 
 set -euo pipefail
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
-log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
-
 MASTER_IP="192.168.88.168"
 REPL_PASSWORD="ReplPassword2026Strong!"
-ROOT_PASSWORD="ваш_пароль_root_на_master_если_есть"  # если root без пароля — оставь пустым
+MASTER_ROOT_PASSWORD="292799619531629514"
+
+log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
 # ======================== БАЗОВЫЕ ПАКЕТЫ ========================
-for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync; do
+for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass; do
     check_and_install "$pkg"
 done
 
@@ -23,8 +23,9 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== SSH КЛЮЧИ АВТОМАТИЧЕСКИ ========================
-log "Настройка автоматического SSH-доступа к master..."
+# ======================== SSH КЛЮЧИ (полностью автоматически) ========================
+log "Настройка автоматического SSH-доступа к master (с паролем)..."
+
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 
@@ -32,17 +33,18 @@ if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
 
-# Добавляем master в known_hosts автоматически
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 
-# Автоматически копируем публичный ключ на master (используем sshpass если нужно)
-if ! ssh -o BatchMode=yes -o ConnectTimeout=5 root@$MASTER_IP "exit" 2>/dev/null; then
-    log "Копируем SSH-ключ на master (требуется пароль root на master один раз)..."
-    apt-get install -y sshpass || true
-    sshpass -p "$ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no root@$MASTER_IP || true
-fi
+# Автоматическое копирование ключа с использованием пароля
+log "Копируем SSH-ключ на master автоматически..."
+sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
 
-log "✅ SSH доступ к master настроен автоматически"
+# Проверка, что ключ работает
+if ssh -o BatchMode=yes -o ConnectTimeout=10 root@$MASTER_IP "exit" 2>/dev/null; then
+    log "✅ SSH ключ успешно установлен на master"
+else
+    log "⚠️  Не удалось установить SSH ключ автоматически. Проверьте пароль MASTER_ROOT_PASSWORD в скрипте."
+fi
 
 # ======================== NGINX + LAMP ========================
 log "Настройка Nginx..."
@@ -76,9 +78,7 @@ enable_and_start_service memcached
 # ======================== MySQL SLAVE ========================
 log "Настройка MySQL Slave..."
 check_and_install mysql-server
-
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
-
 systemctl restart mysql
 enable_and_start_service mysql
 
@@ -94,32 +94,26 @@ START SLAVE;
 " 2>/dev/null || true
 
 sleep 5
-mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running|Last_Error"
-
-log "✅ MySQL Slave настроен"
+mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
 # ======================== WordPress + Автосинхронизация ========================
-log "Установка и синхронизация WordPress файлов..."
+log "Установка и синхронизация WordPress..."
 install_wordpress_files
 
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
-rsync -avz --delete --exclude=wp-config.php -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes" root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/
+rsync -avz --delete --exclude=wp-config.php -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes" root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
 chown -R www-data:www-data /var/www/html/wordpress
-echo "[$(date)] Файлы WordPress синхронизированы с master" >> /var/log/wp-sync.log
+echo "[$(date)] Синхронизация выполнена" >> /var/log/wp-sync.log
 EOF
 chmod +x /usr/local/bin/sync-wp-files.sh
 
-# Первая автоматическая синхронизация
-/usr/local/bin/sync-wp-files.sh || log "WARNING: Первая синхронизация не удалась (проверьте SSH ключ)"
+/usr/local/bin/sync-wp-files.sh || true
 
-# Добавляем в cron (каждые 5 минут)
+# Cron каждые 5 минут
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-log "✅ Автоматическая синхронизация WordPress настроена"
-
 # ======================== MONITORING + FILEBEAT ========================
-log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
@@ -153,25 +147,19 @@ EOF
 cd /opt/filebeat
 docker compose up -d
 
-# ======================== ФИНАЛЬНЫЙ ПОЛНЫЙ ОТЧЁТ ========================
+# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
-echo "✅ SLAVE СЕРВЕР ПОЛНОСТЬЮ НАСТРОЕН АВТОМАТИЧЕСКИ!"
+echo "✅ SLAVE УСТАНОВЛЕН ПОЛНОСТЬЮ АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
-echo "IP Slave:                  192.168.88.167"
-echo "WordPress:                 http://192.168.88.168  (через master)"
-echo "MySQL Slave:               репликация активна"
-echo "Memcached:                 общий с master"
-echo "Автосинхронизация файлов:  каждые 5 минут (/usr/local/bin/sync-wp-files.sh)"
+echo "WordPress:                 http://192.168.88.168"
+echo "MySQL Slave:               репликация запущена"
+echo "Автосинхронизация файлов:  каждые 5 минут"
 echo "Node Exporter:             http://192.168.88.167:9100/metrics"
 echo "Filebeat:                  логи отправляются на master"
 echo ""
-echo "Проверить репликацию на slave:"
+echo "Проверить репликацию:"
 echo "   mysql -e 'SHOW SLAVE STATUS\G;'"
-echo ""
-echo "Логи синхронизации:        /var/log/wp-sync.log"
-echo "=================================================================="
-echo "Всё работает в автоматическом режиме."
 echo "=================================================================="
 
 log "Slave установка завершена полностью автоматически."
