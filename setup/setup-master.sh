@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ОТЧЁТОМ И АВТОМАТИЧЕСКОЙ НАСТРОЙКОЙ РЕПЛИКАЦИИ
+# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ РЕПЛИКАЦИЕЙ
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# ======================== LAMP + Memcached + MySQL ========================
+# ======================== LAMP + Memcached ========================
 log "Установка LAMP стека..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
@@ -50,16 +50,16 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL Master + исправления для репликации ========================
+# ======================== MySQL Master + ИСПРАВЛЕННАЯ РЕПЛИКАЦИЯ ========================
 setup_mysql_master
 
-log "Настройка прав для repl и привязка к сети..."
-mysql -e "
-GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY 'ReplPassword2026Strong!';
-FLUSH PRIVILEGES;
-" || true
+log "Настройка прав для репликации (repl)..."
+mysql -e "DROP USER IF EXISTS 'repl'@'%';" || true
+mysql -e "CREATE USER 'repl'@'%' IDENTIFIED BY 'ReplPassword2026Strong!';" || true
+mysql -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';" || true
+mysql -e "FLUSH PRIVILEGES;" || true
 
-# Привязываем MySQL ко всем интерфейсам
+log "Привязываем MySQL ко всем интерфейсам..."
 sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
 
 systemctl restart mysql
@@ -68,7 +68,7 @@ log "Открываем порт 3306 в firewall..."
 ufw allow 3306 || true
 ufw reload || true
 
-log "✅ MySQL Master готов к репликации (порт 3306 открыт)"
+log "✅ MySQL Master готов к репликации (порт 3306 открыт, права для repl выданы)"
 
 # ======================== WordPress ========================
 log "Автоматическая установка WordPress..."
@@ -211,30 +211,19 @@ echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "Система готова к использованию."
-echo ""
-echo "=== ДОСТУП К КОМПОНЕНТАМ ==="
-echo "WordPress (сайт):     http://192.168.88.168"
+echo "WordPress:     http://192.168.88.168"
 echo "   Логин:   admin"
 echo "   Пароль:  AdminPassword2026Strong!"
 echo ""
-echo "Grafana (мониторинг): http://192.168.88.168:3000"
-echo "   Логин:   admin"
-echo "   Пароль:  admin"
-echo "   Дашборд: OTUS Node Exporter Simple"
-echo ""
-echo "Kibana (логи):        http://192.168.88.168:5601"
-echo ""
-echo "Elasticsearch:        http://192.168.88.168:9200"
+echo "Grafana:       http://192.168.88.168:3000 (admin / admin)"
+echo "Kibana:        http://192.168.88.168:5601"
+echo "Elasticsearch: http://192.168.88.168:9200"
 echo ""
 echo "MySQL:"
 echo "   wpuser / WpPassword2026Strong!"
-echo "   repl   / ReplPassword2026Strong!  (для slave)"
+echo "   repl   / ReplPassword2026Strong! (для slave)"
 echo ""
-echo "=== Дополнительно ==="
-echo "• Prometheus:         http://192.168.88.168:9090"
-echo "• Node Exporter:      http://192.168.88.168:9100/metrics"
-echo ""
+echo "Порт 3306 открыт для репликации."
 echo "=================================================================="
 echo "Если нужно восстановить БД:"
 echo "   mysql wordpress < /var/backups/wordpress_*.sql"
