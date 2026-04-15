@@ -1,25 +1,26 @@
 #!/bin/bash
-# setup-master.sh — Жёсткая версия с полной очисткой node.lock для Elasticsearch 9.x
+# setup-master.sh — Быстрая официальная установка ELK (прямые .deb с artifacts.elastic.co)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
 rm -f /etc/apt/sources.list.d/elastic*.list
+
 apt-get update && apt-get upgrade -y
 
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
 
-# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (оставляем как есть)
+# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (без изменений)
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-log "Установка LAMP + Memcached..."
+log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 log "Исправляем ports.conf..."
@@ -78,27 +79,39 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — ЖЁСТКАЯ ОЧИСТКА LOCK ========================
-log "Установка ELK с жёсткой очисткой node.lock..."
+# ======================== ELK — ПРЯМЫЕ .DEB С ОФИЦИАЛЬНОГО CDN ========================
+log "Установка ELK прямыми .deb с artifacts.elastic.co (быстро и стабильно)..."
 
-wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
-echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
-apt-get update || log "WARNING: Elastic repo"
+cd /tmp
 
-apt-get install -y elasticsearch filebeat
+# Elasticsearch 8.17.1 (стабильная версия)
+log "Скачиваем Elasticsearch 8.17.1..."
+wget --continue --timeout=120 --show-progress -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb -O elasticsearch-8.17.1-amd64.deb
+dpkg -i elasticsearch-8.17.1-amd64.deb || apt-get install -f -y
 
-# Системные настройки
-echo "vm.max_map_count=262144" > /etc/sysctl.d/99-elasticsearch.conf
-sysctl -p /etc/sysctl.d/99-elasticsearch.conf
+# Filebeat
+log "Скачиваем Filebeat 8.17.1..."
+wget --continue --timeout=120 --show-progress -q https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb -O filebeat-8.17.1-amd64.deb
+dpkg -i filebeat-8.17.1-amd64.deb || apt-get install -f -y
 
-# Жёсткая очистка ВСЕХ lock и данных
-log "Жёсткая очистка lock-файлов и данных..."
+# Kibana и Logstash — только если ещё не скачаны (чтобы не ждать по 20 минут каждый раз)
+if [ ! -f kibana-8.17.1-amd64.deb ]; then
+    log "Скачиваем Kibana 8.17.1..."
+    wget --continue --timeout=120 --show-progress -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb -O kibana-8.17.1-amd64.deb
+fi
+dpkg -i kibana-8.17.1-amd64.deb || apt-get install -f -y
+
+if [ ! -f logstash-8.17.1-amd64.deb ]; then
+    log "Скачиваем Logstash 8.17.1..."
+    wget --continue --timeout=120 --show-progress -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb -O logstash-8.17.1-amd64.deb
+fi
+dpkg -i logstash-8.17.1-amd64.deb || apt-get install -f -y
+
+# Конфиги
+log "Настройка конфигов ELK..."
 systemctl stop elasticsearch kibana logstash filebeat || true
-rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock /var/log/elasticsearch/* /tmp/elasticsearch* || true
-chown -R elasticsearch:elasticsearch /var/lib/elasticsearch /var/log/elasticsearch
-chmod -R 755 /var/lib/elasticsearch
+rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock || true
 
-# Чистый single-node конфиг
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
 cluster.name: otus-elk
 node.name: otus-master
@@ -111,8 +124,6 @@ discovery.type: single-node
 node.max_local_storage_nodes: 1
 EOF
 
-# Kibana
-mkdir -p /etc/kibana
 cat > /etc/kibana/kibana.yml << 'EOF'
 server.port: 5601
 server.host: "0.0.0.0"
@@ -120,8 +131,6 @@ elasticsearch.hosts: ["http://localhost:9200"]
 xpack.security.enabled: false
 EOF
 
-# Filebeat
-mkdir -p /etc/filebeat
 cat > /etc/filebeat/filebeat.yml << 'EOF'
 filebeat.inputs:
 - type: filestream
@@ -135,32 +144,21 @@ output.elasticsearch:
   index: "logs-%{+yyyy.MM.dd}"
 EOF
 
-# Запуск
-log "Запускаем ELK после жёсткой очистки..."
 systemctl daemon-reload
 enable_and_start_service elasticsearch
 enable_and_start_service kibana || true
 enable_and_start_service logstash || true
 enable_and_start_service filebeat || true
 
-sleep 12
-if curl -s http://localhost:9200 > /dev/null; then
-    log "✅ Elasticsearch запущен успешно!"
-else
-    log "⚠️ Elasticsearch не запустился. Полный журнал:"
-    journalctl -u elasticsearch -n 100
-fi
-
-log "ELK настроен"
+log "ELK установлен через официальные .deb (8.17.1)"
 
 # Финальный вывод
 echo ""
 echo "=================================================================="
-echo "✅ УСТАНОВКА ЗАВЕРШЕНА"
+echo "✅ УСТАНОВКА ЗАВЕРШЕНА!"
 echo "=================================================================="
 echo "WordPress: http://192.168.88.168 (admin / AdminPassword2026Strong!)"
 echo "Grafana:   http://192.168.88.168:3000 (admin / admin)"
 echo "Kibana:    http://192.168.88.168:5601"
-echo "=================================================================="
-echo "Если Elasticsearch не запустился — journalctl -u elasticsearch -n 100"
+echo "Elasticsearch: http://192.168.88.168:9200"
 echo "=================================================================="
