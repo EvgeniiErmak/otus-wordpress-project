@@ -50,20 +50,25 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL Master + права для репликации ========================
+# ======================== MySQL Master + исправления для репликации ========================
 setup_mysql_master
 
-log "Настройка прав для пользователя repl (репликация)..."
+log "Настройка прав для repl и привязка к сети..."
 mysql -e "
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY 'ReplPassword2026Strong!';
 FLUSH PRIVILEGES;
 " || true
 
-log "Открываем порт 3306 для slave..."
+# Привязываем MySQL ко всем интерфейсам
+sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
+
+systemctl restart mysql
+
+log "Открываем порт 3306 в firewall..."
 ufw allow 3306 || true
 ufw reload || true
 
-log "✅ MySQL Master готов к репликации"
+log "✅ MySQL Master готов к репликации (порт 3306 открыт)"
 
 # ======================== WordPress ========================
 log "Автоматическая установка WordPress..."
