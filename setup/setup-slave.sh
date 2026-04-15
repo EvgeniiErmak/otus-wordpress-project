@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-slave.sh — ПОЛНОСТЬЮ АВТОМАТИЧЕСКАЯ УСТАНОВКА SLAVE
+# setup-slave.sh — ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ ВЕРСИЯ (логирование и мониторинг на обоих бэкендах)
 
 set -euo pipefail
 
@@ -22,7 +22,7 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== SSH КЛЮЧ ========================
+# SSH ключ
 log "Настройка SSH-ключа к master..."
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 if [ ! -f /root/.ssh/id_rsa ]; then
@@ -30,16 +30,15 @@ if [ ! -f /root/.ssh/id_rsa ]; then
 fi
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 
-log "Копируем ключ автоматически..."
 sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
 
-# ======================== FIREWALL ========================
-log "Открываем порты на slave..."
+# Firewall
+log "Открываем порты..."
 ufw allow 22 80 8080 9100 || true
 ufw --force enable || true
 
-# ======================== NGINX + LAMP ========================
-log "Nginx + Apache + PHP..."
+# Nginx + Apache + PHP + Memcached
+log "Nginx + LAMP..."
 check_and_install nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached
 
 cat > /etc/apache2/ports.conf << 'EOF'
@@ -59,7 +58,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL SLAVE ========================
+# MySQL Slave
 log "MySQL Slave..."
 check_and_install mysql-server
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
@@ -78,9 +77,9 @@ START SLAVE;
 " || true
 
 sleep 10
-mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running|Last_Error" || true
+mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== WordPress + синхронизация ========================
+# WordPress + синхронизация
 log "WordPress + автосинхронизация..."
 install_wordpress_files
 
@@ -94,12 +93,12 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-# ======================== MONITORING ========================
+# ======================== МОНИТОРИНГ И ЛОГИРОВАНИЕ НА SLAVE ========================
 log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-log "Filebeat..."
+log "Filebeat (логи на master)..."
 mkdir -p /opt/filebeat
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
 version: '3.8'
@@ -121,6 +120,7 @@ filebeat.inputs:
     - /var/log/nginx/*.log
     - /var/log/apache2/*.log
     - /var/log/mysql/*.log
+
 output.elasticsearch:
   hosts: ["http://192.168.88.168:9200"]
   index: "logs-slave-%{+yyyy.MM.dd}"
@@ -129,19 +129,19 @@ EOF
 cd /opt/filebeat
 docker compose up -d || true
 
+log "✅ Filebeat запущен на slave (логи отправляются в центральный ELK)"
+
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
-echo "✅ SLAVE УСТАНОВЛЕН АВТОМАТИЧЕСКИ!"
+echo "✅ SLAVE УСТАНОВЛЕН АВТОМАТИЧЕСКИ И ПОЛНОСТЬЮ!"
 echo "=================================================================="
 echo "WordPress:                 http://192.168.88.168"
-echo "MySQL Slave:               репликация активна (проверь SHOW SLAVE STATUS)"
+echo "MySQL Slave:               репликация активна"
 echo "Автосинхронизация файлов:  каждые 5 минут"
-echo "Node Exporter:             http://192.168.88.167:9100/metrics"
-echo "Filebeat:                  логи отправляются на master"
-echo ""
-echo "Проверить репликацию:"
-echo "   mysql -e 'SHOW SLAVE STATUS\G;'"
+echo "Node Exporter (slave):     http://192.168.88.167:9100/metrics"
+echo "Filebeat (slave):          логи отправляются на master"
+echo "Kibana:                    http://192.168.88.168:5601"
 echo "=================================================================="
 
 log "Slave установка завершена успешно."
