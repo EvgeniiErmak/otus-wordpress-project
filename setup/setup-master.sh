@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная установка на MASTER со всеми компонентами (включая ELK через .deb)
+# setup-master.sh — Полная установка со всеми компонентами (ELK через прямые .deb ссылки)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -7,12 +7,12 @@ log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
 apt-get update && apt-get upgrade -y
 
-# Базовые пакеты
+# Базовые пакеты + Java для ELK
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx Reverse Proxy + Load Balancer
+# 1. Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -24,7 +24,7 @@ log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 # ports.conf
-log "Исправляем /etc/apache2/ports.conf..."
+log "Исправляем ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 
@@ -51,14 +51,14 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Master
+# MySQL
 setup_mysql_master
 
-# WordPress — автоматическая установка
+# WordPress
 install_wordpress_files
 auto_install_wordpress
 
-# Мониторинг: Prometheus + Grafana (.deb)
+# Prometheus + Grafana
 check_and_install prometheus prometheus-node-exporter
 log "Установка Grafana через .deb..."
 cd /tmp
@@ -71,43 +71,49 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK через .deb пакеты (версия 8.17.1) ========================
-log "Установка ELK Stack через .deb пакеты (Elasticsearch 8.17.1)..."
+# ======================== ELK — прямые .deb пакеты (8.17.1) ========================
+log "Установка ELK Stack (Elasticsearch 8.17.1) через прямые .deb..."
 
 cd /tmp
 
-# Скачиваем пакеты
+log "Скачиваем пакеты ELK..."
 wget -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
 wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
 wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
 wget -q https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
 
-# Установка
-dpkg -i elasticsearch-8.17.1-amd64.deb
-dpkg -i kibana-8.17.1-amd64.deb
-dpkg -i logstash-8.17.1-amd64.deb
-dpkg -i filebeat-8.17.1-amd64.deb
+log "Устанавливаем Elasticsearch..."
+dpkg -i elasticsearch-8.17.1-amd64.deb || apt-get install -f -y
 
-# Базовая конфигурация Elasticsearch (без security для простоты)
+log "Устанавливаем Kibana..."
+dpkg -i kibana-8.17.1-amd64.deb || apt-get install -f -y
+
+log "Устанавливаем Logstash..."
+dpkg -i logstash-8.17.1-amd64.deb || apt-get install -f -y
+
+log "Устанавливаем Filebeat..."
+dpkg -i filebeat-8.17.1-amd64.deb || apt-get install -f -y
+
+# Базовая конфигурация ELK
+log "Настройка конфигурации ELK..."
+
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
 cluster.name: otus-elk
-node.name: elk-master
+node.name: otus-master
 path.data: /var/lib/elasticsearch
 path.logs: /var/log/elasticsearch
 network.host: 0.0.0.0
 http.port: 9200
 xpack.security.enabled: false
-cluster.initial_master_nodes: ["elk-master"]
+cluster.initial_master_nodes: ["otus-master"]
 EOF
 
-# Kibana
 cat > /etc/kibana/kibana.yml << 'EOF'
 server.port: 5601
 server.host: "0.0.0.0"
 elasticsearch.hosts: ["http://localhost:9200"]
 EOF
 
-# Filebeat простая конфигурация для nginx + apache
 cat > /etc/filebeat/filebeat.yml << 'EOF'
 filebeat.inputs:
 - type: filestream
@@ -115,23 +121,21 @@ filebeat.inputs:
   paths:
     - /var/log/nginx/*.log
     - /var/log/apache2/*.log
+    - /var/log/mysql/*.log
 
 output.elasticsearch:
   hosts: ["localhost:9200"]
   index: "logs-%{+yyyy.MM.dd}"
-
-setup.kibana:
-  host: "http://localhost:5601"
 EOF
 
-# Запуск сервисов
+# Запуск
 systemctl daemon-reload
 enable_and_start_service elasticsearch
 enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен через .deb пакеты (8.17.1)"
+log "ELK установлен через .deb пакеты 8.17.1"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
