@@ -1,11 +1,11 @@
 #!/bin/bash
-# setup-master.sh — Полная установка на MASTER (ELK через зеркало serveradmin.ru)
+# setup-master.sh — Финальная версия с исправленной установкой ELK
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Удаляем старые Elastic репозитории
+# Удаляем старые репозитории Elastic
 rm -f /etc/apt/sources.list.d/elastic*.list
 
 apt-get update && apt-get upgrade -y
@@ -83,6 +83,7 @@ echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/source
 
 apt-get update || log "WARNING: apt update с зеркалом Elastic завершился с предупреждением"
 
+# Устанавливаем все пакеты ELK явно
 check_and_install elasticsearch kibana logstash filebeat
 
 # Конфигурация ELK (простая, без security)
@@ -125,7 +126,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен через зеркало"
+log "ELK установлен успешно"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
