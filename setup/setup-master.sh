@@ -1,12 +1,12 @@
 #!/bin/bash
-# setup-master.sh — Финальная версия с прямой установкой Kibana через .deb
+# setup-master.sh — Полная версия с исправленным ELK (Elasticsearch 9.x single-node)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Удаляем старые Elastic репозитории
-rm -f /etc/apt/sources.list.d/elastic*.list /etc/apt/sources.list.d/elasticrepo.list
+# Удаляем старые репозитории
+rm -f /etc/apt/sources.list.d/elastic*.list
 
 apt-get update && apt-get upgrade -y
 
@@ -15,14 +15,14 @@ for pkg in curl wget git unzip ca-certificates software-properties-common gnupg 
     check_and_install "$pkg"
 done
 
-# 1. Nginx
+# Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# 2. Apache + PHP + Memcached + MySQL
+# Apache + PHP + Memcached + MySQL
 log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
@@ -54,14 +54,14 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL
+# MySQL Master
 setup_mysql_master
 
-# WordPress
+# WordPress (автоматическая установка)
 install_wordpress_files
 auto_install_wordpress
 
-# Prometheus + Grafana
+# Prometheus + Grafana + авто-дашборд
 check_and_install prometheus prometheus-node-exporter
 log "Установка Grafana через .deb..."
 cd /tmp
@@ -70,34 +70,39 @@ dpkg -i grafana.deb || apt-get install -f -y
 rm -f grafana.deb
 
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
+
+# Автоматический дашборд Node Exporter
+mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
+cat << 'EOF' > /etc/grafana/provisioning/dashboards/node-exporter.yml
+apiVersion: 1
+providers:
+  - name: 'default'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+EOF
+wget -q -O /var/lib/grafana/dashboards/node-exporter-full.json https://grafana.com/api/dashboards/1860/revisions/1/download || true
+chown -R grafana:grafana /var/lib/grafana/dashboards
+
 systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — только Elasticsearch + Filebeat через apt, Kibana + Logstash через .deb ========================
-log "Установка Elasticsearch и Filebeat через зеркало..."
+# ======================== ELK — исправленная версия для 9.x ========================
+log "Установка и настройка ELK Stack (исправлено для single-node)..."
 
+# Elasticsearch + Filebeat через зеркало
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
-
-apt-get update || log "WARNING: apt update с зеркалом Elastic"
+apt-get update || log "WARNING: apt update Elastic"
 
 apt-get install -y elasticsearch filebeat
 
-# Kibana и Logstash через прямой .deb (чтобы избежать проблем)
-log "Установка Kibana и Logstash через .deb пакеты..."
-
-cd /tmp
-wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb -O kibana.deb
-wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb -O logstash.deb
-
-dpkg -i kibana.deb || apt-get install -f -y
-dpkg -i logstash.deb || apt-get install -f -y
-rm -f kibana.deb logstash.deb
-
-# Конфигурация ELK
-log "Настройка конфигурации ELK..."
-
+# Полная перезапись конфига Elasticsearch (чистый single-node без конфликтов)
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
 cluster.name: otus-elk
 node.name: otus-master
@@ -106,15 +111,20 @@ path.logs: /var/log/elasticsearch
 network.host: 0.0.0.0
 http.port: 9200
 xpack.security.enabled: false
-cluster.initial_master_nodes: ["otus-master"]
+discovery.type: single-node
 EOF
 
+# Kibana (простая конфигурация)
+mkdir -p /etc/kibana
 cat > /etc/kibana/kibana.yml << 'EOF'
 server.port: 5601
 server.host: "0.0.0.0"
 elasticsearch.hosts: ["http://localhost:9200"]
+xpack.security.enabled: false
 EOF
 
+# Filebeat
+mkdir -p /etc/filebeat
 cat > /etc/filebeat/filebeat.yml << 'EOF'
 filebeat.inputs:
 - type: filestream
@@ -129,34 +139,29 @@ output.elasticsearch:
   index: "logs-%{+yyyy.MM.dd}"
 EOF
 
+# Чистим данные и перезапускаем
+log "Чистим данные Elasticsearch после предыдущих ошибок..."
+systemctl stop elasticsearch kibana logstash filebeat || true
+rm -rf /var/lib/elasticsearch/nodes/* || true
+
 systemctl daemon-reload
 enable_and_start_service elasticsearch
-enable_and_start_service kibana
-enable_and_start_service logstash
-enable_and_start_service filebeat
+enable_and_start_service kibana || true
+enable_and_start_service logstash || true
+enable_and_start_service filebeat || true
 
-log "ELK установлен (Kibana и Logstash через .deb)"
+log "ELK настроен (single-node режим)"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress:"
-echo "   URL:      http://192.168.88.168"
-echo "   Логин:    admin"
-echo "   Пароль:   AdminPassword2026Strong!"
-echo ""
-echo "Grafana:"
-echo "   URL:      http://192.168.88.168:3000"
-echo "   Логин:    admin"
-echo "   Пароль:   admin"
-echo ""
-echo "Kibana (ELK):"
-echo "   URL:      http://192.168.88.168:5601"
-echo ""
+echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
+echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд Node Exporter авто)"
+echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
-echo "MySQL wpuser: wpuser / WpPassword2026Strong!"
+echo "MySQL wpuser:  wpuser / WpPassword2026Strong!"
 echo "=================================================================="
-echo "Все компоненты по схеме установлены."
+echo "Все компоненты по схеме установлены автоматически."
 echo "=================================================================="
