@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная финальная установка на MASTER с надёжной установкой Grafana через .deb
+# setup-master.sh — Полная установка на MASTER со всеми компонентами (включая ELK через .deb)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -8,11 +8,11 @@ log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 apt-get update && apt-get upgrade -y
 
 # Базовые пакеты
-for pkg in curl wget git unzip ca-certificates software-properties-common gnupg; do
+for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx Reverse Proxy
+# 1. Nginx Reverse Proxy + Load Balancer
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -54,18 +54,15 @@ enable_and_start_service memcached
 # MySQL Master
 setup_mysql_master
 
-# WordPress (автоматическая установка)
+# WordPress — автоматическая установка
 install_wordpress_files
 auto_install_wordpress
 
-# Мониторинг: Prometheus + Node Exporter
+# Мониторинг: Prometheus + Grafana (.deb)
 check_and_install prometheus prometheus-node-exporter
-
-# Grafana — установка через .deb пакет (самый стабильный способ)
-log "Установка Grafana через .deb пакет..."
-apt-get install -y adduser libfontconfig1
+log "Установка Grafana через .deb..."
 cd /tmp
-wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb   # актуальная версия на 2026
+wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
 rm -f grafana.deb
 
@@ -74,26 +71,74 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ELK (базово)
-curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" > /etc/apt/sources.list.d/elastic-8.x.list
-apt-get update
-check_and_install elasticsearch kibana filebeat
-enable_and_start_service elasticsearch kibana
+# ======================== ELK через .deb пакеты (версия 8.17.1) ========================
+log "Установка ELK Stack через .deb пакеты (Elasticsearch 8.17.1)..."
 
-# Скрипты и cron
-mkdir -p /usr/local/bin
-cp scripts/sync-wp-files.sh /usr/local/bin/ 2>/dev/null || true
-cp backup/backup-db.sh /usr/local/bin/ 2>/dev/null || true
-chmod +x /usr/local/bin/*.sh 2>/dev/null || true
-crontab cron/jobs 2>/dev/null || true
+cd /tmp
+
+# Скачиваем пакеты
+wget -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
+wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
+wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
+wget -q https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
+
+# Установка
+dpkg -i elasticsearch-8.17.1-amd64.deb
+dpkg -i kibana-8.17.1-amd64.deb
+dpkg -i logstash-8.17.1-amd64.deb
+dpkg -i filebeat-8.17.1-amd64.deb
+
+# Базовая конфигурация Elasticsearch (без security для простоты)
+cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
+cluster.name: otus-elk
+node.name: elk-master
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+network.host: 0.0.0.0
+http.port: 9200
+xpack.security.enabled: false
+cluster.initial_master_nodes: ["elk-master"]
+EOF
+
+# Kibana
+cat > /etc/kibana/kibana.yml << 'EOF'
+server.port: 5601
+server.host: "0.0.0.0"
+elasticsearch.hosts: ["http://localhost:9200"]
+EOF
+
+# Filebeat простая конфигурация для nginx + apache
+cat > /etc/filebeat/filebeat.yml << 'EOF'
+filebeat.inputs:
+- type: filestream
+  enabled: true
+  paths:
+    - /var/log/nginx/*.log
+    - /var/log/apache2/*.log
+
+output.elasticsearch:
+  hosts: ["localhost:9200"]
+  index: "logs-%{+yyyy.MM.dd}"
+
+setup.kibana:
+  host: "http://localhost:5601"
+EOF
+
+# Запуск сервисов
+systemctl daemon-reload
+enable_and_start_service elasticsearch
+enable_and_start_service kibana
+enable_and_start_service logstash
+enable_and_start_service filebeat
+
+log "ELK установлен через .deb пакеты (8.17.1)"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress (автоматически установлен):"
+echo "WordPress:"
 echo "   URL:      http://192.168.88.168"
 echo "   Логин:    admin"
 echo "   Пароль:   AdminPassword2026Strong!"
@@ -103,11 +148,11 @@ echo "   URL:      http://192.168.88.168:3000"
 echo "   Логин:    admin"
 echo "   Пароль:   admin"
 echo ""
-echo "MySQL (wpuser):"
-echo "   Логин:    wpuser"
-echo "   Пароль:   WpPassword2026Strong!"
+echo "Kibana (ELK):"
+echo "   URL:      http://192.168.88.168:5601"
 echo ""
-echo "Memcached: работает на 0.0.0.0:11211"
+echo "Elasticsearch: http://192.168.88.168:9200"
+echo "MySQL wpuser: wpuser / WpPassword2026Strong!"
 echo "=================================================================="
-echo "Проверь в браузере: http://192.168.88.168"
+echo "Все компоненты по схеме установлены."
 echo "=================================================================="
