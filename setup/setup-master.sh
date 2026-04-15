@@ -1,13 +1,13 @@
 #!/bin/bash
-# setup-master.sh — Финальная версия с принудительным удалением старого Elastic репозитория
+# setup-master.sh — Полная установка на MASTER с ELK через зеркало elasticrepo.serveradmin.ru
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Принудительно удаляем старый Elastic репозиторий, чтобы избежать 403
-rm -f /etc/apt/sources.list.d/elastic*.list
-log "Старый Elastic репозиторий удалён"
+# Принудительно удаляем старый Elastic репозиторий
+rm -f /etc/apt/sources.list.d/elastic*.list /etc/apt/sources.list.d/elasticrepo.list
+log "Старые Elastic репозитории удалены"
 
 apt-get update && apt-get upgrade -y
 
@@ -16,7 +16,7 @@ for pkg in curl wget git unzip ca-certificates software-properties-common gnupg 
     check_and_install "$pkg"
 done
 
-# 1. Nginx
+# 1. Nginx Reverse Proxy
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -55,7 +55,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL
+# MySQL Master
 setup_mysql_master
 
 # WordPress
@@ -75,24 +75,20 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK через прямые .deb 8.17.1 ========================
-log "Установка ELK Stack (8.17.1) через прямые .deb пакеты..."
+# ======================== ELK через зеркало elasticrepo.serveradmin.ru ========================
+log "Установка ELK Stack через зеркало elasticrepo.serveradmin.ru..."
 
-cd /tmp
+# Импорт ключа зеркала
+wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add -
 
-log "Скачиваем пакеты ELK..."
-wget -q -N https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
-wget -q -N https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
-wget -q -N https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
-wget -q -N https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
+# Добавление репозитория (для Ubuntu 24.04 — используем bookworm как ближайший)
+echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
 
-log "Устанавливаем пакеты ELK..."
-dpkg -i elasticsearch-8.17.1-amd64.deb || apt-get install -f -y
-dpkg -i kibana-8.17.1-amd64.deb || apt-get install -f -y
-dpkg -i logstash-8.17.1-amd64.deb || apt-get install -f -y
-dpkg -i filebeat-8.17.1-amd64.deb || apt-get install -f -y
+apt-get update || log "WARNING: apt update с зеркалом Elastic завершился с предупреждением"
 
-# Конфигурация ELK
+check_and_install elasticsearch kibana logstash filebeat
+
+# Простая конфигурация ELK (без security для теста)
 log "Настройка конфигурации ELK..."
 
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -132,7 +128,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен успешно"
+log "ELK установлен через зеркало elasticrepo.serveradmin.ru"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
@@ -155,5 +151,5 @@ echo ""
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "MySQL wpuser: wpuser / WpPassword2026Strong!"
 echo "=================================================================="
-echo "Все компоненты по схеме установлены."
+echo "Все компоненты (включая ELK) установлены."
 echo "=================================================================="
