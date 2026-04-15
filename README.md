@@ -1,70 +1,176 @@
-# OTUS WordPress Project — Высоконагруженная инфраструктура (Личный блог)
+# OTUS WordPress Project — Высоконагруженная инфраструктура
 
-## Архитектура (соответствует схеме)
+**Тема проекта:** Личный блог / портфолио  
+**Инфраструктура:** Master + Slave (Ubuntu 24.04 LTS)  
+**Цель:** Полностью автоматизированное развертывание и восстановление двухсерверной среды с балансировкой нагрузки, репликацией БД, мониторингом и централизованным логированием.
 
-**Master (192.168.88.168)**
-- Nginx — Reverse Proxy + балансировка
-- Apache + PHP 8.3 + WordPress (backend 1)
-- MySQL Master
-- Memcached (общее хранилище сессий)
-- Prometheus + Node Exporter + Grafana (мониторинг)
-- ELK Stack (Elasticsearch + Kibana + Filebeat) — централизованное логирование
+---
 
-**Slave (192.168.88.167)**
-- Apache + PHP 8.3 + WordPress (backend 2)
-- MySQL Slave (репликация)
-- Memcached (общий)
-- Node Exporter
-- Filebeat (логи отправляются на master)
+## Архитектура проекта
 
-## Как полностью восстановить проект с нуля (автоматически)
+### Master Server (192.168.88.168)
 
-### На Master сервере:
-```bash
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash
+- Nginx — Reverse Proxy и балансировщик нагрузки  
+- Apache + PHP 8.3 + WordPress — основной backend  
+- MySQL Master  
+- Memcached — общее хранилище сессий  
+- Prometheus + Node Exporter + Grafana — мониторинг  
+- ELK Stack:
+  - Elasticsearch
+  - Kibana
+  - Filebeat
 
-На Slave сервере:
-Bashcurl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash
-Логины и пароли
-WordPress
-URL: http://192.168.88.168
-Логин: admin
-Пароль: AdminPassword2026Strong!
-Grafana
-URL: http://192.168.88.168:3000
-Логин: admin
-Пароль: admin
-MySQL
+### Slave Server (192.168.88.167)
 
-wpuser / WpPassword2026Strong!
-repl / ReplPassword2026Strong! (репликация)
+- Apache + PHP 8.3 + WordPress — резервный backend  
+- MySQL Slave — репликация с Master  
+- Memcached  
+- Node Exporter  
+- Filebeat  
 
-Kibana
-URL: http://192.168.88.168:5601
-Elasticsearch
-URL: http://192.168.88.168:9200
-Полезные команды
+---
 
-Синхронизация файлов (на slave): /usr/local/bin/sync-wp-files.sh
-Бэкап БД со slave: /usr/local/bin/backup-db.sh
-Проверка репликации (на slave): mysql -e "SHOW SLAVE STATUS\G;"
+## Полное восстановление проекта с нуля
 
-Структура репозитория
+### Развертывание Master
 
+`curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash`
+
+### Развертывание Slave
+
+`curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash`
+
+После выполнения этих двух команд инфраструктура будет полностью развернута и готова к работе.
+
+---
+
+## Доступы и учетные данные
+
+### WordPress
+
+- URL: http://192.168.88.168  
+- Логин: admin  
+- Пароль: AdminPassword2026Strong!  
+
+### Grafana
+
+- URL: http://192.168.88.168:3000  
+- Логин: admin  
+- Пароль: admin  
+
+### MySQL
+
+- WordPress User: wpuser  
+- Password: WpPassword2026Strong!  
+
+- Replication User: repl  
+- Password: ReplPassword2026Strong!  
+
+### Kibana
+
+- URL: http://192.168.88.168:5601  
+
+### Elasticsearch
+
+- URL: http://192.168.88.168:9200  
+
+### Prometheus
+
+- URL: http://192.168.88.168:9090  
+
+---
+
+## Полезные команды
+
+### На Slave сервере
+
+Принудительная синхронизация файлов WordPress:
+
+`/usr/local/bin/sync-wp-files.sh`
+
+Проверка состояния репликации MySQL:
+
+`mysql -e "SHOW SLAVE STATUS\G;"`
+
+### На Master сервере
+
+Ручной запуск резервного копирования БД:
+
+`/usr/local/bin/backup-db.sh`
+
+---
+
+## Структура репозитория
+
+```text
 otus-wordpress-project/
 ├── README.md
-├── configs/                  # Все конфиги
+├── configs/
 │   ├── nginx/
 │   ├── apache/
 │   ├── mysql/
 │   └── grafana/
-├── setup/                    # Основные установочные скрипты
+├── setup/
 │   ├── common-functions.sh
 │   ├── setup-master.sh
 │   └── setup-slave.sh
-├── recovery/                 # Точки входа (одна команда)
+├── recovery/
 │   ├── recovery-master.sh
 │   └── recovery-slave.sh
-├── scripts/                  # Дополнительные скрипты
+├── scripts/
 │   └── backup-db.sh
-└── cron/                     # (если будут)
+└── cron/
+```
+
+---
+
+## Публикация проекта в GitHub
+
+`cd ~/otus-wordpress-project && git add . && git commit -m "Final project delivery - full automation" && git push origin main`
+
+---
+
+## Особенности реализации
+
+- Полная автоматизация развертывания одной командой  
+- Idempotent-скрипты (безопасный повторный запуск)  
+- Автоматическая настройка MySQL Master-Slave репликации  
+- Автоматическая синхронизация WordPress файлов каждые 5 минут  
+- Автоматическая передача SSH-ключей между серверами  
+- Автоматическое создание Grafana Dashboard  
+- Централизованное логирование через ELK Stack  
+- Общее Memcached-хранилище для сессий между backend-узлами  
+
+---
+
+## План аварийного восстановления
+
+1. Поднять новый Master сервер  
+2. Выполнить:  
+   `curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash`
+
+3. Поднять новый Slave сервер  
+4. Выполнить:  
+   `curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash`
+
+5. При необходимости восстановить БД вручную:  
+   `mysql wordpress < backup.sql`
+
+---
+
+## RTO / Время восстановления
+
+**Полное восстановление инфраструктуры:** 5–10 минут
+
+---
+
+## Итог
+
+Проект реализует production-like высокодоступную WordPress-инфраструктуру с:
+
+- Балансировкой нагрузки  
+- Репликацией БД  
+- Централизованным логированием  
+- Мониторингом  
+- Автоматическим восстановлением  
+- Полной инфраструктурой как код (IaC-подход)
