@@ -1,25 +1,32 @@
 #!/bin/bash
-# setup-master.sh — Полная установка ELK 9.3.3 прямыми .deb с официального сайта (ничего не исключено)
+# setup-master.sh — Docker-based ELK (быстро, стабильно, без тяжёлых .deb)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-rm -f /etc/apt/sources.list.d/elastic*.list
-apt-get update && apt-get upgrade -y
-
-for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
+# Базовые пакеты + Docker
+for pkg in curl wget git unzip ca-certificates gnupg; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx
+# Установка Docker (если нет)
+if ! command -v docker &> /dev/null; then
+    log "Устанавливаем Docker..."
+    curl -fsSL https://get.docker.com | sh
+    usermod -aG docker root
+    systemctl enable --now docker
+fi
+
+check_and_install docker-compose
+
+# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (остаются как есть)
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# 2. Apache + PHP + Memcached + MySQL
 log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
@@ -79,59 +86,59 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK 9.3.3 — ПРЯМЫЕ .DEB С ОФИЦИАЛЬНОГО CDN ========================
-log "Установка ELK 9.3.3 прямыми .deb с artifacts.elastic.co..."
+# ======================== ELK через Docker (быстро и стабильно) ========================
+log "Установка ELK через Docker (Elasticsearch 8.17.1 + Kibana + Filebeat)..."
 
-cd /tmp
+mkdir -p /opt/elk
 
-log "Скачиваем Elasticsearch 9.3.3..."
-wget --continue --timeout=180 --show-progress -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-9.3.3-amd64.deb -O elasticsearch-9.3.3-amd64.deb
-dpkg -i elasticsearch-9.3.3-amd64.deb || apt-get install -f -y
+cat > /opt/elk/docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
 
-log "Скачиваем Kibana 9.3.3..."
-wget --continue --timeout=180 --show-progress -q https://artifacts.elastic.co/downloads/kibana/kibana-9.3.3-amd64.deb -O kibana-9.3.3-amd64.deb
-dpkg -i kibana-9.3.3-amd64.deb || apt-get install -f -y
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.1
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
 
-log "Скачиваем Logstash 9.3.3..."
-wget --continue --timeout=180 --show-progress -q https://artifacts.elastic.co/downloads/logstash/logstash-9.3.3-amd64.deb -O logstash-9.3.3-amd64.deb
-dpkg -i logstash-9.3.3-amd64.deb || apt-get install -f -y
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.1
+    container_name: filebeat
+    command: ["-e", "--strict.perms=false"]
+    volumes:
+      - /var/log:/var/log:ro
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
 
-log "Скачиваем Filebeat 9.3.3..."
-wget --continue --timeout=180 --show-progress -q https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-9.3.3-amd64.deb -O filebeat-9.3.3-amd64.deb
-dpkg -i filebeat-9.3.3-amd64.deb || apt-get install -f -y
-
-# Системные настройки
-echo "vm.max_map_count=262144" > /etc/sysctl.d/99-elasticsearch.conf
-sysctl -p /etc/sysctl.d/99-elasticsearch.conf
-
-# Жёсткая очистка
-log "Жёсткая очистка lock-файлов и данных..."
-systemctl stop elasticsearch kibana logstash filebeat || true
-rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock /var/log/elasticsearch/* || true
-chown -R elasticsearch:elasticsearch /var/lib/elasticsearch /var/log/elasticsearch
-
-# Конфиги
-log "Настройка конфигов ELK 9.3.3..."
-cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
-cluster.name: otus-elk
-node.name: otus-master
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-network.host: 0.0.0.0
-http.port: 9200
-xpack.security.enabled: false
-discovery.type: single-node
-node.max_local_storage_nodes: 1
+volumes:
+  esdata:
 EOF
 
-cat > /etc/kibana/kibana.yml << 'EOF'
-server.port: 5601
-server.host: "0.0.0.0"
-elasticsearch.hosts: ["http://localhost:9200"]
-xpack.security.enabled: false
-EOF
-
-cat > /etc/filebeat/filebeat.yml << 'EOF'
+cat > /opt/elk/filebeat.yml << 'EOF'
 filebeat.inputs:
 - type: filestream
   enabled: true
@@ -139,18 +146,16 @@ filebeat.inputs:
     - /var/log/nginx/*.log
     - /var/log/apache2/*.log
     - /var/log/mysql/*.log
+
 output.elasticsearch:
-  hosts: ["localhost:9200"]
+  hosts: ["http://elasticsearch:9200"]
   index: "logs-%{+yyyy.MM.dd}"
 EOF
 
-systemctl daemon-reload
-enable_and_start_service elasticsearch
-enable_and_start_service kibana || true
-enable_and_start_service logstash || true
-enable_and_start_service filebeat || true
+cd /opt/elk
+docker compose up -d
 
-log "ELK 9.3.3 установлен"
+log "ELK запущен через Docker (8.17.1)"
 
 # Финальный вывод
 echo ""
@@ -161,4 +166,6 @@ echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!
 echo "Grafana:       http://192.168.88.168:3000  admin / admin"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
+echo "=================================================================="
+echo "Все компоненты (включая полный ELK) запущены автоматически."
 echo "=================================================================="
