@@ -1,163 +1,134 @@
-# OTUS WordPress Project — Enterprise High Availability Infrastructure
+# 🚀 OTUS WordPress Project — Enterprise High Availability Infrastructure
 
-## Описание проекта
-
-Проект представляет собой полностью автоматизированную высокодоступную инфраструктуру для размещения WordPress-сайта (личный блог / портфолио), реализованную в соответствии с принципами production-ready deployment и Infrastructure as Code (IaC).
-
-Решение обеспечивает:
-
-- отказоустойчивость backend-узлов;
-- репликацию базы данных master-slave;
-- балансировку нагрузки;
-- централизованный сбор логов;
-- мониторинг и визуализацию метрик;
-- быстрое аварийное восстановление среды.
+![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04-orange?style=for-the-badge&logo=linux)
+![Nginx](https://img.shields.io/badge/Nginx-Reverse%20Proxy-green?style=for-the-badge&logo=nginx)
+![Apache](https://img.shields.io/badge/Apache-Web%20Server-red?style=for-the-badge&logo=apache)
+![MySQL](https://img.shields.io/badge/MySQL-Replication-blue?style=for-the-badge&logo=mysql)
+![Grafana](https://img.shields.io/badge/Grafana-Monitoring-orange?style=for-the-badge&logo=grafana)
+![ELK](https://img.shields.io/badge/ELK-Logging-yellow?style=for-the-badge)
 
 ---
 
-## Цели проекта
+## 📌 Описание проекта
 
-- Развертывание production-like WordPress-инфраструктуры
-- Демонстрация навыков автоматизации Linux/DevOps/SRE
-- Реализация полного disaster recovery сценария
-- Минимизация RTO/RPO при сбоях инфраструктуры
-- Подтверждение владения Infrastructure as Code подходом
+Production-ready инфраструктура для WordPress с высокой доступностью, автоматическим восстановлением и централизованным мониторингом.
+
+💡 Реализовано в стиле **Infrastructure as Code (IaC)** с полной автоматизацией.
 
 ---
 
-## Архитектурная схема
+## 🎯 Цели проекта
 
-### Master Node — 192.168.88.168
-
-- **Nginx** — Reverse Proxy / Load Balancer
-- **Apache + PHP 8.3 + WordPress** — Primary Backend
-- **MySQL Master** — Primary Database
-- **Memcached** — Shared Session Storage
-- **Prometheus** — Metrics Collection
-- **Node Exporter** — Host Metrics
-- **Grafana** — Metrics Visualization
-- **Elasticsearch** — Log Storage / Search
-- **Kibana** — Log Visualization
-- **Filebeat** — Log Shipping
+- ⚙️ Полная автоматизация развертывания  
+- 🔁 Отказоустойчивость и репликация  
+- 📊 Мониторинг и логирование  
+- 🔥 Быстрое аварийное восстановление  
+- 🧠 Демонстрация DevOps/SRE практик  
 
 ---
 
-### Slave Node — 192.168.88.167
+## 🏗 Архитектура
 
-- **Apache + PHP 8.3 + WordPress** — Secondary Backend
-- **MySQL Slave** — Replicated Database
-- **Memcached** — Shared Session Storage
-- **Node Exporter** — Host Metrics
-- **Filebeat** — Log Shipping
+### 🟢 Master Node — `192.168.88.168`
 
----
-
-## Функциональные возможности
-
-- Полностью автоматизированное развертывание инфраструктуры
-- Повторяемые idempotent deployment scripts
-- Автоматическая настройка MySQL Master-Slave репликации
-- Автоматическая синхронизация WordPress файлов между backend-нодами
-- Централизованный мониторинг всей инфраструктуры
-- Централизованный сбор логов приложений и системы
-- Disaster Recovery за 5–10 минут
-- Полное восстановление инфраструктуры с нуля двумя командами
+- 🌐 Nginx — балансировка нагрузки
+- 🧩 Apache + PHP 8.3 + WordPress
+- 🗄 MySQL Master
+- ⚡ Memcached
+- 📊 Prometheus + Grafana
+- 📈 Node Exporter
+- 📦 ELK Stack (Elasticsearch + Kibana + Filebeat)
 
 ---
 
-## Быстрый старт / Disaster Recovery
+### 🔵 Slave Node — `192.168.88.167`
 
-### Развертывание Master Node
-
-`curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash`
-
----
-
-### Развертывание Slave Node
-
-`curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash`
+- 🧩 Apache + PHP 8.3 + WordPress
+- 🗄 MySQL Slave (репликация)
+- ⚡ Memcached
+- 📈 Node Exporter
+- 📦 Filebeat
 
 ---
 
-После выполнения двух команд инфраструктура полностью готова к эксплуатации.
+## ⚡ Быстрый старт (1 команда = готовый сервер)
+
+### 🟢 Развертывание Master Node
+
+```bash
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash
+```
 
 ---
 
-## Доступы к сервисам
+### 🔵 Развертывание Slave Node
 
-### WordPress
-
-- **URL:** http://192.168.88.168
-- **Username:** admin
-- **Password:** AdminPassword2026Strong!
+```bash
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash
+```
 
 ---
 
-### Grafana
+## 🔐 Доступы
 
-- **URL:** http://192.168.88.168:3000
-- **Username:** admin
-- **Password:** admin
-
----
-
-### Prometheus
-
-- **URL:** http://192.168.88.168:9090
+### 🌍 WordPress
+- URL: http://192.168.88.168  
+- Login: `admin`  
+- Password: `AdminPassword2026Strong!`
 
 ---
 
-### Kibana
-
-- **URL:** http://192.168.88.168:5601
-
----
-
-### Elasticsearch
-
-- **URL:** http://192.168.88.168:9200
+### 📊 Grafana
+- URL: http://192.168.88.168:3000  
+- Login: `admin`  
+- Password: `admin`
 
 ---
 
-## База данных
-
-### WordPress DB User
-
-- **Username:** wpuser
-- **Password:** WpPassword2026Strong!
+### 🔎 Kibana
+- URL: http://192.168.88.168:5601  
 
 ---
 
-### Replication User
-
-- **Username:** repl
-- **Password:** ReplPassword2026Strong!
+### 📈 Prometheus
+- URL: http://192.168.88.168:9090  
 
 ---
 
-## Эксплуатационные команды
-
-### Slave Node
-
-#### Принудительная синхронизация WordPress файлов
-
-`/usr/local/bin/sync-wp-files.sh`
-
-#### Проверка состояния репликации MySQL
-
-`mysql -e "SHOW SLAVE STATUS\G;"`
+### 🗄 Elasticsearch
+- URL: http://192.168.88.168:9200  
 
 ---
 
-### Master Node
+## 🛠 Полезные команды
 
-#### Ручной запуск резервного копирования БД
+### 🔵 Slave Node
 
-`/usr/local/bin/backup-db.sh`
+#### 🔄 Синхронизация WordPress
+
+```bash
+/usr/local/bin/sync-wp-files.sh
+```
+
+#### 📡 Проверка репликации MySQL
+
+```bash
+mysql -e "SHOW SLAVE STATUS\G;"
+```
 
 ---
 
-## Структура репозитория
+### 🟢 Master Node
+
+#### 💾 Backup базы данных
+
+```bash
+/usr/local/bin/backup-db.sh
+```
+
+---
+
+## 📁 Структура проекта
 
 ```text
 otus-wordpress-project/
@@ -167,82 +138,65 @@ otus-wordpress-project/
 │   ├── apache/
 │   ├── mysql/
 │   └── grafana/
-│
 ├── setup/
 │   ├── common-functions.sh
 │   ├── setup-master.sh
 │   └── setup-slave.sh
-│
 ├── recovery/
 │   ├── recovery-master.sh
 │   └── recovery-slave.sh
-│
 ├── scripts/
 │   ├── backup-db.sh
 │   └── sync-wp-files.sh
-│
 └── cron/
 ```
 
 ---
 
-## Публикация изменений в GitHub
+## 🚨 Disaster Recovery
 
-`cd ~/otus-wordpress-project && git add . && git commit -m "Update infrastructure automation" && git push origin main`
+```bash
+# MASTER
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-master.sh | sudo bash
 
----
-
-## Disaster Recovery Procedure
-
-### Полное восстановление инфраструктуры
-
-1. Поднять новый Master Node
-2. Выполнить recovery-master.sh
-3. Поднять новый Slave Node
-4. Выполнить recovery-slave.sh
-5. При необходимости восстановить БД вручную:
-
-`mysql wordpress < backup.sql`
+# SLAVE
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/recovery/recovery-slave.sh | sudo bash
+```
 
 ---
 
-## SLA / RTO / RPO
+## ⏱ SLA
 
-### Recovery Time Objective (RTO)
-
-- **5–10 минут**
-
-### Recovery Point Objective (RPO)
-
-- **До 5 минут потери данных**
-  (зависит от момента последней синхронизации / репликации)
+- ⚡ RTO: **5–10 минут**
+- 💾 RPO: **до 5 минут потери данных**
 
 ---
 
-## Production Engineering Best Practices Implemented
+## 🧠 Best Practices
 
-- Infrastructure as Code
-- Idempotent Provisioning
-- Automated Disaster Recovery
-- Horizontal Scaling Ready Architecture
-- Centralized Monitoring
-- Centralized Logging
-- Database Replication
-- Session Sharing Between Backends
-- Automated File Synchronization
-- Minimal Manual Intervention
+- ✅ Infrastructure as Code  
+- ✅ Idempotent scripts  
+- ✅ Automated Recovery  
+- ✅ Centralized Logging  
+- ✅ Monitoring stack  
+- ✅ DB Replication  
+- ✅ Session sharing  
+- ✅ Zero manual steps  
 
 ---
 
-## Итог
+## 🏁 Итог
 
-Данный проект демонстрирует построение production-like отказоустойчивой веб-инфраструктуры enterprise-уровня с использованием современных DevOps/SRE практик.
+Готовая **enterprise-инфраструктура уровня production**, которую можно:
 
-Решение готово к масштабированию, автоматическому восстановлению и дальнейшему развитию в сторону полноценного Kubernetes / Cloud Native deployment.
+- 🔄 Развернуть с нуля за минуты  
+- 📈 Масштабировать  
+- 🔧 Автоматически восстановить  
+- ☁️ Перенести в облако / Kubernetes  
 
 ---
 
-## Автор
+## 👨‍💻 Автор
 
 **Evgenii Ermak**  
-OTUS Final Project — Linux Administrator / DevOps Track
+OTUS — Linux Administrator / DevOps Track
