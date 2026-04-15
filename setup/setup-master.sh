@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная финальная установка на MASTER с исправленной Grafana
+# setup-master.sh — Полная финальная установка на MASTER с надёжной установкой Grafana через .deb
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -23,7 +23,7 @@ enable_and_start_service nginx
 log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# ports.conf fix
+# ports.conf
 log "Исправляем /etc/apache2/ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
@@ -58,15 +58,16 @@ setup_mysql_master
 install_wordpress_files
 auto_install_wordpress
 
-# Мониторинг: Prometheus + Node Exporter + Grafana (по официальной документации)
+# Мониторинг: Prometheus + Node Exporter
 check_and_install prometheus prometheus-node-exporter
 
-log "Установка Grafana (официальный способ)..."
-mkdir -p /etc/apt/keyrings
-wget -q -O /etc/apt/keyrings/grafana.asc https://apt.grafana.com/gpg-full.key
-echo "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
-apt-get update
-check_and_install grafana
+# Grafana — установка через .deb пакет (самый стабильный способ)
+log "Установка Grafana через .deb пакет..."
+apt-get install -y adduser libfontconfig1
+cd /tmp
+wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb   # актуальная версия на 2026
+dpkg -i grafana.deb || apt-get install -f -y
+rm -f grafana.deb
 
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl daemon-reload
@@ -87,7 +88,7 @@ cp backup/backup-db.sh /usr/local/bin/ 2>/dev/null || true
 chmod +x /usr/local/bin/*.sh 2>/dev/null || true
 crontab cron/jobs 2>/dev/null || true
 
-# ======================== ФИНАЛЬНЫЙ ВЫВОД ДОСТУПОВ ========================
+# ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
@@ -102,11 +103,11 @@ echo "   URL:      http://192.168.88.168:3000"
 echo "   Логин:    admin"
 echo "   Пароль:   admin"
 echo ""
-echo "MySQL (для WordPress):"
+echo "MySQL (wpuser):"
 echo "   Логин:    wpuser"
 echo "   Пароль:   WpPassword2026Strong!"
 echo ""
 echo "Memcached: работает на 0.0.0.0:11211"
 echo "=================================================================="
-echo "Теперь откройте в браузере http://192.168.88.168 — сайт должен работать сразу."
+echo "Проверь в браузере: http://192.168.88.168"
 echo "=================================================================="
