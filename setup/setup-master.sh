@@ -1,12 +1,12 @@
 #!/bin/bash
-# setup-master.sh — Финальная версия с исправленной установкой ELK
+# setup-master.sh — Максимально надёжная версия с ELK через зеркало
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Удаляем старые репозитории Elastic
-rm -f /etc/apt/sources.list.d/elastic*.list
+# Удаляем все старые Elastic репозитории
+rm -f /etc/apt/sources.list.d/elastic*.list /etc/apt/sources.list.d/elasticrepo.list
 
 apt-get update && apt-get upgrade -y
 
@@ -77,16 +77,19 @@ enable_and_start_service grafana-server
 # ======================== ELK через зеркало elasticrepo.serveradmin.ru ========================
 log "Установка ELK Stack через зеркало elasticrepo.serveradmin.ru..."
 
-# Добавляем зеркало
-wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add -
+wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
 
-apt-get update || log "WARNING: apt update с зеркалом Elastic завершился с предупреждением"
+apt-get update || log "WARNING: apt update с зеркалом завершился с предупреждением"
 
-# Устанавливаем все пакеты ELK явно
-check_and_install elasticsearch kibana logstash filebeat
+# Явная установка всех пакетов ELK
+log "Устанавливаем elasticsearch kibana logstash filebeat..."
+apt-get install -y elasticsearch kibana logstash filebeat
 
-# Конфигурация ELK (простая, без security)
+# Создаём директории на всякий случай
+mkdir -p /etc/kibana /etc/logstash/conf.d /etc/filebeat
+
+# Конфигурация ELK
 log "Настройка конфигурации ELK..."
 
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -126,7 +129,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен успешно"
+log "ELK установлен"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
