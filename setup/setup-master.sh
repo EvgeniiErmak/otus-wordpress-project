@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Финальная версия с полной автоматической настройкой
+# setup-master.sh — Финальная версия с исправленным портом Elasticsearch в Docker
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -17,14 +17,13 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# Nginx
+# Nginx + Apache + PHP + Memcached + MySQL + WordPress (авто)
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# Apache + PHP + Memcached + MySQL
 log "Установка LAMP..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
@@ -52,7 +51,6 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL + WordPress (полная автоустановка)
 setup_mysql_master
 install_wordpress_files
 
@@ -60,16 +58,15 @@ log "Автоматическая установка WordPress..."
 cd /var/www/html/wordpress
 wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --locale=ru_RU --skip-email --allow-root || true
 
-log "✅ WordPress полностью настроен автоматически"
+log "✅ WordPress настроен автоматически"
 
-# Grafana + авто-дашборд + перезапуск для данных
+# Grafana + Prometheus + Node Exporter
 check_and_install prometheus prometheus-node-exporter
-log "Grafana с авто-дашбордом..."
+log "Grafana..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
 rm -f grafana.deb
-
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 
 mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
@@ -91,9 +88,11 @@ chown -R grafana:grafana /var/lib/grafana
 systemctl restart prometheus prometheus-node-exporter grafana-server
 enable_and_start_service grafana-server
 
-# ELK через Docker
-log "ELK через Docker..."
+# ======================== ELK через Docker (исправленный порт) ========================
+log "ELK через Docker (исправлен network.host)..."
+
 mkdir -p /opt/elk
+
 cat > /opt/elk/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
@@ -104,6 +103,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - network.host=0.0.0.0
     ports:
       - "9200:9200"
     restart: unless-stopped
@@ -115,6 +115,7 @@ services:
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
     ports:
       - "5601:5601"
     depends_on:
@@ -151,19 +152,20 @@ output.elasticsearch:
 EOF
 
 cd /opt/elk
+docker compose down || true
 docker compose up -d
 
-log "ELK запущен через Docker"
+log "ELK запущен через Docker (порт 9200 доступен)"
 
 # Финальный вывод
 echo ""
 echo "=================================================================="
 echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
-echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
-echo "Grafana:       http://192.168.88.168:3000  admin / admin"
+echo "WordPress:     http://192.168.88.168"
+echo "Grafana:       http://192.168.88.168:3000"
 echo "Kibana:        http://192.168.88.168:5601"
-echo "Elasticsearch: http://192.168.88.168:9200"
+echo "Elasticsearch: http://192.168.88.168:9200   ← теперь должен работать"
 echo "=================================================================="
-echo "Подожди 1-2 минуты — данные в Grafana дашборде должны появиться."
+echo "Подожди 30 секунд и обнови страницы."
 echo "=================================================================="
