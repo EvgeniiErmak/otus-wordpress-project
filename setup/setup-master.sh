@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ РЕПЛИКАЦИЕЙ
+# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ РЕПЛИКАЦИЕЙ (mysql_native_password)
 
 set -euo pipefail
 
@@ -7,7 +7,7 @@ source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates gnupg; do
     check_and_install "$pkg"
 done
@@ -19,7 +19,7 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== NGINX ========================
+# Nginx
 log "Настройка Nginx reverse proxy..."
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
@@ -27,7 +27,7 @@ ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# ======================== LAMP + Memcached ========================
+# LAMP + Memcached
 log "Установка LAMP стека..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
@@ -53,9 +53,9 @@ enable_and_start_service memcached
 # ======================== MySQL Master + ИСПРАВЛЕННАЯ РЕПЛИКАЦИЯ ========================
 setup_mysql_master
 
-log "Настройка прав для репликации (repl)..."
+log "Настройка пользователя repl с mysql_native_password..."
 mysql -e "DROP USER IF EXISTS 'repl'@'%';" || true
-mysql -e "CREATE USER 'repl'@'%' IDENTIFIED BY 'ReplPassword2026Strong!';" || true
+mysql -e "CREATE USER 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'ReplPassword2026Strong!';" || true
 mysql -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';" || true
 mysql -e "FLUSH PRIVILEGES;" || true
 
@@ -64,11 +64,11 @@ sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysql
 
 systemctl restart mysql
 
-log "Открываем порт 3306 в firewall..."
+log "Открываем порт 3306..."
 ufw allow 3306 || true
 ufw reload || true
 
-log "✅ MySQL Master готов к репликации (порт 3306 открыт, права для repl выданы)"
+log "✅ MySQL Master готов к репликации (используется mysql_native_password)"
 
 # ======================== WordPress ========================
 log "Автоматическая установка WordPress..."
@@ -206,16 +206,13 @@ docker compose down || true
 docker compose up -d
 log "ELK запущен"
 
-# ======================== ПОЛНЫЙ ФИНАЛЬНЫЙ ОТЧЁТ ========================
+# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168"
-echo "   Логин:   admin"
-echo "   Пароль:  AdminPassword2026Strong!"
-echo ""
-echo "Grafana:       http://192.168.88.168:3000 (admin / admin)"
+echo "Grafana:       http://192.168.88.168:3000"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo ""
@@ -223,11 +220,7 @@ echo "MySQL:"
 echo "   wpuser / WpPassword2026Strong!"
 echo "   repl   / ReplPassword2026Strong! (для slave)"
 echo ""
-echo "Порт 3306 открыт для репликации."
-echo "=================================================================="
-echo "Если нужно восстановить БД:"
-echo "   mysql wordpress < /var/backups/wordpress_*.sql"
-echo "   /usr/local/bin/sync-wp-files.sh"
+echo "Порт 3306 открыт, права для repl выданы с mysql_native_password."
 echo "=================================================================="
 
-log "Master восстановлен успешно с полным отчётом."
+log "Master восстановлен успешно."
