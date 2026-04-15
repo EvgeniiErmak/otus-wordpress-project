@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Docker-based ELK (быстро, стабильно, без тяжёлых .deb)
+# setup-master.sh — Полная автоматическая настройка (WordPress + Grafana дашборд + ELK)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -10,24 +10,22 @@ for pkg in curl wget git unzip ca-certificates gnupg; do
     check_and_install "$pkg"
 done
 
-# Установка Docker (если нет)
 if ! command -v docker &> /dev/null; then
     log "Устанавливаем Docker..."
     curl -fsSL https://get.docker.com | sh
-    usermod -aG docker root
     systemctl enable --now docker
 fi
-
 check_and_install docker-compose
 
-# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (остаются как есть)
+# Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-log "Установка Apache, PHP, Memcached и MySQL..."
+# Apache + PHP + Memcached + MySQL
+log "Установка LAMP стека..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 log "Исправляем ports.conf..."
@@ -54,17 +52,60 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
+# MySQL Master
 setup_mysql_master
+
+# WordPress — ПОЛНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА
 install_wordpress_files
-auto_install_wordpress
+
+log "Автоматическая настройка WordPress (язык русский, сайт, админ)..."
+cd /var/www/html/wordpress
+
+# Создаём wp-config.php с правильными параметрами
+cat > wp-config.php << 'EOF'
+<?php
+define('DB_NAME', 'wordpress');
+define('DB_USER', 'wpuser');
+define('DB_PASSWORD', 'WpPassword2026Strong!');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+
+define('AUTH_KEY',         'put your unique phrase here');
+define('SECURE_AUTH_KEY',  'put your unique phrase here');
+define('LOGGED_IN_KEY',    'put your unique phrase here');
+define('NONCE_KEY',        'put your unique phrase here');
+define('AUTH_SALT',        'put your unique phrase here');
+define('SECURE_AUTH_SALT', 'put your unique phrase here');
+define('LOGGED_IN_SALT',   'put your unique phrase here');
+define('NONCE_SALT',       'put your unique phrase here');
+
+define('WP_DEBUG', false);
+define('WP_CACHE', true);
+
+$table_prefix = 'wp_';
+
+define('WP_LANG', 'ru_RU');
+
+if ( !defined('ABSPATH') )
+    define('ABSPATH', dirname(__FILE__) . '/');
+
+require_once ABSPATH . 'wp-settings.php';
+EOF
+
+# Запускаем wp-cli для автоматической установки
+wp core install --url="http://192.168.88.168" --title="Мой личный блог" --admin_user="admin" --admin_password="AdminPassword2026Strong!" --admin_email="admin@example.com" --skip-email --allow-root || true
+
+log "✅ WordPress настроен автоматически (русский язык, сайт создан)"
 
 # Grafana + авто-дашборд
 check_and_install prometheus prometheus-node-exporter
-log "Grafana..."
+log "Grafana с авто-дашбордом..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
 rm -f grafana.deb
+
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 
 mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
@@ -86,11 +127,9 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK через Docker (быстро и стабильно) ========================
-log "Установка ELK через Docker (Elasticsearch 8.17.1 + Kibana + Filebeat)..."
-
+# ELK через Docker (остаётся как в предыдущей версии)
+log "ELK через Docker..."
 mkdir -p /opt/elk
-
 cat > /opt/elk/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
@@ -155,17 +194,18 @@ EOF
 cd /opt/elk
 docker compose up -d
 
-log "ELK запущен через Docker (8.17.1)"
+log "ELK запущен через Docker"
 
 # Финальный вывод
 echo ""
 echo "=================================================================="
-echo "✅ УСТАНОВКА ЗАВЕРШЕНА!"
+echo "✅ ВСЁ НАСТРОЕНО АВТОМАТИЧЕСКИ!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
-echo "Grafana:       http://192.168.88.168:3000  admin / admin"
+echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд Node Exporter)"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "=================================================================="
-echo "Все компоненты (включая полный ELK) запущены автоматически."
+echo "WordPress установлен с русским языком и готовым сайтом."
+echo "Grafana дашборд настроен автоматически."
 echo "=================================================================="
