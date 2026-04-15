@@ -1,11 +1,10 @@
 #!/bin/bash
-# setup-master.sh — Финальная версия с агрессивной очисткой Elasticsearch 9.x
+# setup-master.sh — Максимально агрессивная версия для Elasticsearch 9.x (lock + cleanup)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Базовая подготовка
 rm -f /etc/apt/sources.list.d/elastic*.list
 apt-get update && apt-get upgrade -y
 
@@ -13,14 +12,14 @@ for pkg in curl wget git unzip ca-certificates software-properties-common gnupg 
     check_and_install "$pkg"
 done
 
-# Nginx, Apache, PHP, Memcached, MySQL, WordPress, Grafana — без изменений (оставляем как есть)
+# Nginx + Apache + PHP + Memcached + MySQL + WordPress + Grafana (без изменений)
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-log "Установка Apache, PHP, Memcached и MySQL..."
+log "Установка LAMP + Memcached..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 log "Исправляем ports.conf..."
@@ -42,7 +41,7 @@ a2enconf php8.3-fpm
 systemctl restart apache2
 enable_and_start_service apache2
 
-log "Настройка Memcached..."
+log "Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
@@ -53,7 +52,7 @@ auto_install_wordpress
 
 # Grafana + авто-дашборд
 check_and_install prometheus prometheus-node-exporter
-log "Установка Grafana..."
+log "Grafana..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
@@ -79,8 +78,8 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — агрессивная очистка и single-node ========================
-log "Установка и исправление ELK Stack..."
+# ======================== ELK — агрессивная очистка lock + single-node ========================
+log "Установка ELK с агрессивной очисткой lock-файлов..."
 
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
@@ -88,14 +87,15 @@ apt-get update || log "WARNING: Elastic repo"
 
 apt-get install -y elasticsearch filebeat
 
-# Системные настройки (vm.max_map_count)
+# Системные настройки
 echo "vm.max_map_count=262144" > /etc/sysctl.d/99-elasticsearch.conf
 sysctl -p /etc/sysctl.d/99-elasticsearch.conf
 
-# Полная очистка данных и lock-файлов
-log "Агрессивная очистка данных Elasticsearch..."
-systemctl stop elasticsearch || true
-rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock /var/log/elasticsearch/* || true
+# Агрессивная очистка ВСЕХ lock и данных
+log "Полная очистка lock-файлов и данных Elasticsearch..."
+systemctl stop elasticsearch kibana logstash filebeat || true
+rm -rf /var/lib/elasticsearch/nodes/* /var/lib/elasticsearch/*.lock /var/log/elasticsearch/* /tmp/elasticsearch* || true
+chown -R elasticsearch:elasticsearch /var/lib/elasticsearch /var/log/elasticsearch
 
 # Чистый single-node конфиг
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -107,6 +107,7 @@ network.host: 0.0.0.0
 http.port: 9200
 xpack.security.enabled: false
 discovery.type: single-node
+node.max_local_storage_nodes: 1
 EOF
 
 # Kibana
@@ -134,32 +135,29 @@ output.elasticsearch:
 EOF
 
 # Запуск
-log "Запускаем ELK сервисы..."
+log "Запускаем ELK сервисы после очистки..."
 systemctl daemon-reload
 enable_and_start_service elasticsearch
 enable_and_start_service kibana || true
 enable_and_start_service logstash || true
 enable_and_start_service filebeat || true
 
-# Проверка Elasticsearch
-sleep 8
+sleep 10
 if curl -s http://localhost:9200 > /dev/null; then
-    log "✅ Elasticsearch запущен успешно"
+    log "✅ Elasticsearch запущен"
 else
-    log "⚠️ Elasticsearch не запустился. Смотри журнал: journalctl -u elasticsearch -n 100"
+    log "⚠️ Elasticsearch всё ещё не запустился. Журнал:"
+    journalctl -u elasticsearch -n 30
 fi
 
 log "ELK настроен"
 
-# ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
+# Финальный вывод
 echo ""
 echo "=================================================================="
-echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА!"
+echo "✅ УСТАНОВКА ЗАВЕРШЕНА"
 echo "=================================================================="
-echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
-echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд авто)"
-echo "Kibana:        http://192.168.88.168:5601"
-echo "Elasticsearch: http://192.168.88.168:9200"
-echo "=================================================================="
-echo "Если Elasticsearch не запустился — выполни: journalctl -u elasticsearch -n 100"
+echo "WordPress: http://192.168.88.168 (admin / AdminPassword2026Strong!)"
+echo "Grafana:   http://192.168.88.168:3000 (admin / admin)"
+echo "Kibana:    http://192.168.88.168:5601"
 echo "=================================================================="
