@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — Полная установка со всеми компонентами (ELK через прямые .deb 8.17.1)
+# setup-master.sh — Полная версия со всеми компонентами (ELK через прямые .deb)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -7,10 +7,13 @@ log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
 apt-get update && apt-get upgrade -y
 
-# Базовые пакеты + Java для ELK
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
+
+# Удаляем старый Elastic репозиторий, чтобы избежать 403
+rm -f /etc/apt/sources.list.d/elastic-8.x.list
 
 # 1. Nginx
 check_and_install nginx
@@ -71,12 +74,12 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — прямые .deb (8.17.1) ========================
+# ======================== ELK через прямые .deb 8.17.1 ========================
 log "Установка ELK Stack через прямые .deb пакеты 8.17.1..."
 
 cd /tmp
 
-log "Скачиваем пакеты ELK (если не существуют)..."
+log "Скачиваем пакеты ELK (если отсутствуют)..."
 [ ! -f elasticsearch-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.1-amd64.deb
 [ ! -f kibana-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
 [ ! -f logstash-8.17.1-amd64.deb ] && wget -q https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
@@ -134,7 +137,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен через .deb 8.17.1"
+log "ELK установлен успешно"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
@@ -157,5 +160,5 @@ echo ""
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "MySQL wpuser: wpuser / WpPassword2026Strong!"
 echo "=================================================================="
-echo "Все компоненты по схеме установлены (включая ELK)."
+echo "Все компоненты по схеме установлены."
 echo "=================================================================="
