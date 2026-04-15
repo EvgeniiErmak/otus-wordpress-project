@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ОТЧЁТОМ В КОНЦЕ
+# setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ОТЧЁТОМ И АВТОМАТИЧЕСКОЙ НАСТРОЙКОЙ РЕПЛИКАЦИИ
 
 set -euo pipefail
 
@@ -50,9 +50,22 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
+# ======================== MySQL Master + права для репликации ========================
 setup_mysql_master
-install_wordpress_files
 
+log "Настройка прав для пользователя repl (репликация)..."
+mysql -e "
+GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY 'ReplPassword2026Strong!';
+FLUSH PRIVILEGES;
+" || true
+
+log "Открываем порт 3306 для slave..."
+ufw allow 3306 || true
+ufw reload || true
+
+log "✅ MySQL Master готов к репликации"
+
+# ======================== WordPress ========================
 log "Автоматическая установка WordPress..."
 cd /var/www/html/wordpress
 wp core install --url="http://192.168.88.168" \
@@ -63,12 +76,10 @@ wp core install --url="http://192.168.88.168" \
     --locale=ru_RU \
     --skip-email \
     --allow-root || true
-
 log "✅ WordPress настроен автоматически"
 
 # ======================== PROMETHEUS + GRAFANA ========================
 log "Настройка Prometheus + Node Exporter + Grafana..."
-
 check_and_install prometheus prometheus-node-exporter
 
 cat > /etc/prometheus/prometheus.yml << 'EOF'
@@ -188,7 +199,6 @@ EOF
 cd /opt/elk
 docker compose down || true
 docker compose up -d
-
 log "ELK запущен"
 
 # ======================== ПОЛНЫЙ ФИНАЛЬНЫЙ ОТЧЁТ ========================
@@ -212,16 +222,16 @@ echo "Kibana (логи):        http://192.168.88.168:5601"
 echo ""
 echo "Elasticsearch:        http://192.168.88.168:9200"
 echo ""
-echo "MySQL (wpuser):"
-echo "   Пользователь: wpuser"
-echo "   Пароль:       WpPassword2026Strong!"
+echo "MySQL:"
+echo "   wpuser / WpPassword2026Strong!"
+echo "   repl   / ReplPassword2026Strong!  (для slave)"
 echo ""
 echo "=== Дополнительно ==="
 echo "• Prometheus:         http://192.168.88.168:9090"
 echo "• Node Exporter:      http://192.168.88.168:9100/metrics"
 echo ""
 echo "=================================================================="
-echo "Если нужно восстановить БД из бэкапа:"
+echo "Если нужно восстановить БД:"
 echo "   mysql wordpress < /var/backups/wordpress_*.sql"
 echo "   /usr/local/bin/sync-wp-files.sh"
 echo "=================================================================="
