@@ -1,19 +1,33 @@
 #!/bin/bash
-# backup-db.sh — Бэкап БД со slave с позицией бинлога
+# backup-db.sh — Потабличный бэкап БД со slave с позицией бинлога
 
 BACKUP_DIR="/var/backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="${BACKUP_DIR}/wordpress_${DATE}.sql"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BACKUP_FILE="${BACKUP_DIR}/wordpress_full_${TIMESTAMP}.sql"
+BINLOG_FILE="${BACKUP_DIR}/binlog_position_${TIMESTAMP}.txt"
 
-mkdir -p $BACKUP_DIR
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
-echo "=== Создание бэкапа БД со slave ==="
+log "=== Создание потабличного бэкапа БД со slave ==="
 
-# Бэкап со slave
-mysqldump -u wpuser -p'WpPassword2026Strong!' --single-transaction --master-data=2 wordpress > "$BACKUP_FILE"
+# Получаем текущую позицию бинлога
+mysql -e "SHOW MASTER STATUS\G" > "$BINLOG_FILE"
 
-# Сохранение позиции бинлога
-echo "Бэкап создан: $BACKUP_FILE"
-echo "Позиция бинлога сохранена внутри файла (MASTER_DATA=2)"
+# Потабличный дамп
+databases=$(mysql -e "SHOW DATABASES LIKE 'wordpress';" | grep wordpress)
 
-ls -lh "$BACKUP_FILE"
+if [ -n "$databases" ]; then
+    mysqldump --single-transaction --quick --lock-tables=false \
+        --databases wordpress \
+        --tables $(mysql -e "SHOW TABLES FROM wordpress;" | tail -n +2 | tr '\n' ' ') \
+        > "$BACKUP_FILE"
+    
+    log "✅ Бэкап создан: $BACKUP_FILE"
+    log "📍 Позиция бинлога сохранена в $BINLOG_FILE"
+else
+    log "⚠️ База wordpress не найдена"
+fi
+
+# Оставляем только 3 последних бэкапа
+find "$BACKUP_DIR" -name "wordpress_full_*.sql" -type f | sort -r | tail -n +4 | xargs rm -f 2>/dev/null || true
