@@ -1,16 +1,14 @@
 #!/bin/bash
-# setup-master.sh — Полная версия с исправленным ELK (Elasticsearch 9.x single-node)
+# setup-master.sh — Финальная исправленная версия с ELK (Elasticsearch 9.x)
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# Удаляем старые репозитории
+# Базовая подготовка
 rm -f /etc/apt/sources.list.d/elastic*.list
-
 apt-get update && apt-get upgrade -y
 
-# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
@@ -26,15 +24,12 @@ enable_and_start_service nginx
 log "Установка Apache, PHP, Memcached и MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# ports.conf
 log "Исправляем /etc/apache2/ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
-
 <IfModule ssl_module>
     Listen 443
 </IfModule>
-
 <IfModule mod_gnutls.c>
     Listen 443
 </IfModule>
@@ -57,13 +52,13 @@ enable_and_start_service memcached
 # MySQL Master
 setup_mysql_master
 
-# WordPress (автоматическая установка)
+# WordPress
 install_wordpress_files
 auto_install_wordpress
 
-# Prometheus + Grafana + авто-дашборд
+# Grafana + авто-дашборд
 check_and_install prometheus prometheus-node-exporter
-log "Установка Grafana через .deb..."
+log "Установка Grafana..."
 cd /tmp
 wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb -O grafana.deb
 dpkg -i grafana.deb || apt-get install -f -y
@@ -71,7 +66,7 @@ rm -f grafana.deb
 
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 
-# Автоматический дашборд Node Exporter
+# Авто-дашборд Node Exporter
 mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
 cat << 'EOF' > /etc/grafana/provisioning/dashboards/node-exporter.yml
 apiVersion: 1
@@ -86,23 +81,28 @@ providers:
       path: /var/lib/grafana/dashboards
 EOF
 wget -q -O /var/lib/grafana/dashboards/node-exporter-full.json https://grafana.com/api/dashboards/1860/revisions/1/download || true
-chown -R grafana:grafana /var/lib/grafana/dashboards
+chown -R grafana:grafana /var/lib/grafana
 
 systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# ======================== ELK — исправленная версия для 9.x ========================
-log "Установка и настройка ELK Stack (исправлено для single-node)..."
+# ======================== ELK — исправленная версия ========================
+log "Установка и исправление ELK Stack..."
 
-# Elasticsearch + Filebeat через зеркало
+# Elasticsearch + Filebeat
 wget -qO - http://elasticrepo.serveradmin.ru/elastic.asc | apt-key add - || true
 echo "deb http://elasticrepo.serveradmin.ru bookworm main" | tee /etc/apt/sources.list.d/elasticrepo.list
-apt-get update || log "WARNING: apt update Elastic"
+apt-get update || log "WARNING: Elastic repo update"
 
 apt-get install -y elasticsearch filebeat
 
-# Полная перезапись конфига Elasticsearch (чистый single-node без конфликтов)
+# Системная настройка для Elasticsearch (самая частая причина падения)
+log "Применяем системные настройки для Elasticsearch..."
+echo "vm.max_map_count=262144" > /etc/sysctl.d/99-elasticsearch.conf
+sysctl -p /etc/sysctl.d/99-elasticsearch.conf
+
+# Чистый single-node конфиг
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
 cluster.name: otus-elk
 node.name: otus-master
@@ -114,7 +114,7 @@ xpack.security.enabled: false
 discovery.type: single-node
 EOF
 
-# Kibana (простая конфигурация)
+# Kibana
 mkdir -p /etc/kibana
 cat > /etc/kibana/kibana.yml << 'EOF'
 server.port: 5601
@@ -139,8 +139,8 @@ output.elasticsearch:
   index: "logs-%{+yyyy.MM.dd}"
 EOF
 
-# Чистим данные и перезапускаем
-log "Чистим данные Elasticsearch после предыдущих ошибок..."
+# Полная очистка и запуск
+log "Чистим данные Elasticsearch и запускаем сервисы..."
 systemctl stop elasticsearch kibana logstash filebeat || true
 rm -rf /var/lib/elasticsearch/nodes/* || true
 
@@ -150,18 +150,15 @@ enable_and_start_service kibana || true
 enable_and_start_service logstash || true
 enable_and_start_service filebeat || true
 
-log "ELK настроен (single-node режим)"
+log "ELK настроен"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
 echo "=================================================================="
-echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
+echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168      admin / AdminPassword2026Strong!"
-echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд Node Exporter авто)"
+echo "Grafana:       http://192.168.88.168:3000  admin / admin   (дашборд авто)"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
-echo "MySQL wpuser:  wpuser / WpPassword2026Strong!"
-echo "=================================================================="
-echo "Все компоненты по схеме установлены автоматически."
 echo "=================================================================="
