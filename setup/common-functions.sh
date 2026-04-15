@@ -74,7 +74,7 @@ auto_install_wordpress() {
     ADMIN_PASS="AdminPassword2026Strong!"
     ADMIN_EMAIL="admin@example.com"
 
-    curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar >/dev/null 2>&1
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 
@@ -87,8 +87,6 @@ auto_install_wordpress() {
         --skip-email --allow-root 2>/dev/null || log "WordPress уже был установлен ранее"
 
     log "✅ WordPress установлен АВТОМАТИЧЕСКИ!"
-    log "   Логин:    $ADMIN_USER"
-    log "   Пароль:   $ADMIN_PASS"
 }
 
 log "=== common-functions загружены ==="

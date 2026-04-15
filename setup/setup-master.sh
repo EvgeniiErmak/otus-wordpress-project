@@ -1,6 +1,5 @@
 #!/bin/bash
-# setup-master.sh — ПОЛНАЯ УСТАНОВКА НА MASTER (финальная версия)
-# Запуск одной командой: curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/setup-master.sh | sudo bash
+# setup-master.sh — Полная финальная установка на MASTER
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
@@ -9,11 +8,11 @@ log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 apt-get update && apt-get upgrade -y
 
 # Базовые пакеты
-for pkg in curl wget git unzip ca-certificates software-properties-common; do
+for pkg in curl wget git unzip ca-certificates software-properties-common gnupg; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx Reverse Proxy + Load Balancer
+# 1. Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -52,17 +51,16 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Master
+# MySQL
 setup_mysql_master
 
-# WordPress (файлы + автоматическая установка)
+# WordPress
 install_wordpress_files
 auto_install_wordpress
 
-# 5. Мониторинг: Prometheus + Grafana
+# Мониторинг + Grafana (исправленная установка)
 check_and_install prometheus prometheus-node-exporter
-log "Установка Grafana (официальный репозиторий)..."
-apt-get install -y apt-transport-https software-properties-common wget gnupg
+log "Установка Grafana..."
 wget -q -O /usr/share/keyrings/grafana.key https://apt.grafana.com/gpg.key
 echo "deb [signed-by=/usr/share/keyrings/grafana.key] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
 apt-get update
@@ -73,26 +71,26 @@ systemctl daemon-reload
 systemctl restart grafana-server
 enable_and_start_service grafana-server
 
-# 6. ELK (базово)
+# ELK
 curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" > /etc/apt/sources.list.d/elastic-8.x.list
 apt-get update
 check_and_install elasticsearch kibana filebeat
 enable_and_start_service elasticsearch kibana
 
-# 7. Скрипты и cron
+# Скрипты и cron
 mkdir -p /usr/local/bin
 cp scripts/sync-wp-files.sh /usr/local/bin/ 2>/dev/null || true
 cp backup/backup-db.sh /usr/local/bin/ 2>/dev/null || true
 chmod +x /usr/local/bin/*.sh 2>/dev/null || true
 crontab cron/jobs 2>/dev/null || true
 
-# ======================== ФИНАЛЬНЫЙ ВЫВОД ДОСТУПОВ ========================
+# ======================== ФИНАЛЬНЫЙ БЛОК С ДОСТУПАМИ ========================
 echo ""
 echo "=================================================================="
-echo "✅ УСТАНОВКА MASTER ЗАВЕРШЕНА УСПЕШНО!"
+echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress (автоматически установлен):"
+echo "WordPress (автоматическая установка):"
 echo "   URL:      http://192.168.88.168"
 echo "   Логин:    admin"
 echo "   Пароль:   AdminPassword2026Strong!"
@@ -102,11 +100,12 @@ echo "   URL:      http://192.168.88.168:3000"
 echo "   Логин:    admin"
 echo "   Пароль:   admin"
 echo ""
-echo "MySQL (root):"
-echo "   Пароль:   (установлен по умолчанию MySQL 8.0 — проверьте /etc/mysql/debian.cnf)"
+echo "MySQL пользователь для WordPress:"
+echo "   Логин:    wpuser"
+echo "   Пароль:   WpPassword2026Strong!"
 echo ""
-echo "Memcached:    работает на 0.0.0.0:11211"
-echo "Nginx + Apache: работают (балансировка включена)"
+echo "Memcached:    0.0.0.0:11211"
+echo "Nginx + Apache (балансировка): работают"
 echo "=================================================================="
-echo "Для восстановления slave сервера запустите recovery-slave.sh"
+echo "Откройте браузер → http://192.168.88.168"
 echo "=================================================================="
