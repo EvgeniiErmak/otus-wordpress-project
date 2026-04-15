@@ -1,18 +1,22 @@
 #!/bin/bash
-# setup-master.sh — Полная установка на MASTER со всеми компонентами (ELK через .deb 8.17.1)
+# setup-master.sh — Финальная версия с принудительным удалением старого Elastic репозитория
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
+# Принудительно удаляем старый Elastic репозиторий, чтобы избежать 403
+rm -f /etc/apt/sources.list.d/elastic*.list
+log "Старый Elastic репозиторий удалён"
+
 apt-get update && apt-get upgrade -y
 
-# Базовые пакеты + Java для ELK
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates software-properties-common gnupg adduser libfontconfig1 default-jdk; do
     check_and_install "$pkg"
 done
 
-# 1. Nginx Reverse Proxy
+# 1. Nginx
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
@@ -51,7 +55,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Master
+# MySQL
 setup_mysql_master
 
 # WordPress
@@ -82,13 +86,13 @@ wget -q -N https://artifacts.elastic.co/downloads/kibana/kibana-8.17.1-amd64.deb
 wget -q -N https://artifacts.elastic.co/downloads/logstash/logstash-8.17.1-amd64.deb
 wget -q -N https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb
 
-log "Устанавливаем пакеты..."
+log "Устанавливаем пакеты ELK..."
 dpkg -i elasticsearch-8.17.1-amd64.deb || apt-get install -f -y
 dpkg -i kibana-8.17.1-amd64.deb || apt-get install -f -y
 dpkg -i logstash-8.17.1-amd64.deb || apt-get install -f -y
 dpkg -i filebeat-8.17.1-amd64.deb || apt-get install -f -y
 
-# Простая конфигурация без security
+# Конфигурация ELK
 log "Настройка конфигурации ELK..."
 
 cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
@@ -128,7 +132,7 @@ enable_and_start_service kibana
 enable_and_start_service logstash
 enable_and_start_service filebeat
 
-log "ELK установлен"
+log "ELK установлен успешно"
 
 # ======================== ФИНАЛЬНЫЙ ВЫВОД ========================
 echo ""
