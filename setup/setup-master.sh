@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-master.sh — ИСПРАВЛЕННЫЙ ФИНАЛЬНЫЙ ВАРИАНТ (авто WordPress + сохранение всего работающего)
+# setup/setup-master.sh — ИСПРАВЛЕННЫЙ ФИНАЛЬНЫЙ ВАРИАНТ (WordPress авто + ELK работает)
 
 set -euo pipefail
 
@@ -38,7 +38,6 @@ log "Настройка Apache..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
-
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -93,9 +92,9 @@ wp core install --url="http://192.168.88.168" \
   --allow-root || true
 
 chown -R www-data:www-data /var/www/html/wordpress
-log "✅ WordPress установлен автоматически (русский язык + admin)"
+log "✅ WordPress установлен автоматически"
 
-# Prometheus + Grafana (оставляем как работало)
+# ======================== PROMETHEUS + GRAFANA ========================
 log "Настройка Prometheus + Node Exporter + Grafana..."
 check_and_install prometheus prometheus-node-exporter
 
@@ -126,21 +125,82 @@ enable_and_start_service grafana-server
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl restart grafana-server
 
-# ELK (оставляем как было)
+# ======================== ELK ========================
 log "ELK через Docker..."
 mkdir -p /opt/elk
-# (твой docker-compose.yml остаётся без изменений)
+
+cat > /opt/elk/docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - network.host=0.0.0.0
+    ports:
+      - "9200:9200"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.1
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_PUBLICBASEURL=http://192.168.88.168:5601
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.1
+    container_name: filebeat
+    user: "0:0"
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - /var/log:/var/log:ro
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+    network_mode: "host"
+    restart: unless-stopped
+
+volumes:
+  esdata:
+EOF
+
+cat > /opt/elk/filebeat.yml << 'EOF'
+filebeat.inputs:
+- type: filestream
+  enabled: true
+  paths:
+    - /var/log/nginx/*.log
+    - /var/log/apache2/*.log
+    - /var/log/mysql/*.log
+
+output.elasticsearch:
+  hosts: ["http://localhost:9200"]
+  index: "logs-master-%{+yyyy.MM.dd}"
+EOF
 
 cd /opt/elk
 docker compose down || true
 docker compose up -d
+log "✅ ELK запущен (Elasticsearch + Kibana + Filebeat)"
 
-# Финальный отчёт
+# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
 echo "✅ MASTER УСТАНОВЛЕН УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress:     http://192.168.88.168  (должен открываться полноценный сайт)"
+echo "WordPress:     http://192.168.88.168"
 echo "   Логин:      admin"
 echo "   Пароль:     AdminPassword2026Strong!"
 echo ""
@@ -148,6 +208,8 @@ echo "Grafana:       http://192.168.88.168:3000   (admin / admin)"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
 echo "MySQL wpuser:  wpuser / WpPassword2026Strong!"
+echo ""
+echo "ELK должен работать — проверь Kibana в браузере"
 echo "=================================================================="
 
 log "Master восстановлен успешно."
