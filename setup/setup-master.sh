@@ -1,59 +1,77 @@
 #!/bin/bash
-# setup/setup-master.sh — МАКСИМАЛЬНО ПОЛНЫЙ ВАРИАНТ С АВТОМАТИЧЕСКИМ ДАШБОРДОМ GRAFANA
+# setup/setup-master.sh — ПОЛНЫЙ ФАЙЛ БЕЗ СОКРАЩЕНИЙ
+# Всё по порядку: пакеты → Nginx → Apache → MySQL → WP-CLI → WordPress → Prometheus → Grafana + дашборд → ELK
 
 set -euo pipefail
 
-source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] === ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
+# 1. ОБНОВЛЕНИЕ И БАЗОВЫЕ ПАКЕТЫ
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Обновление списков пакетов..."
+apt-get update -qq
 
-# 1. БАЗОВЫЕ ПАКЕТЫ
-log "Установка базовых пакетов..."
-for pkg in curl wget git unzip ca-certificates gnupg apt-transport-https software-properties-common; do
-    check_and_install "$pkg"
-done
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка базовых пакетов..."
+apt-get install -y curl wget git unzip ca-certificates gnupg apt-transport-https software-properties-common
 
 # 2. DOCKER
-log "Установка Docker..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Docker..."
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sh
     systemctl enable --now docker
 fi
-check_and_install docker-compose-plugin
+apt-get install -y docker-compose-plugin
 
-# 3. NGINX
-log "Установка и настройка Nginx reverse proxy..."
-check_and_install nginx
-download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
+# 3. NGINX REVERSE PROXY
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка и настройка Nginx..."
+apt-get install -y nginx
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/nginx/reverse-proxy.conf \
+    -o /etc/nginx/sites-available/default
+
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
-nginx -t && systemctl restart nginx
-enable_and_start_service nginx
 
-# 4. LAMP + MEMCACHED + MYSQL
-log "Установка Apache + PHP 8.3 + Memcached + MySQL..."
+nginx -t && systemctl restart nginx
+systemctl enable nginx
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Nginx успешно запущен"
+
+# 4. APACHE + PHP + MEMCACHED + MYSQL
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Apache + PHP 8.3 + Memcached + MySQL..."
 apt-get install -y apache2 \
     php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip \
     memcached mysql-server
 
+# Apache на порт 8080
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Apache на порт 8080..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
 
-download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/apache/wordpress.conf \
+    -o /etc/apache2/sites-available/wordpress.conf
+
 a2ensite wordpress
 a2dissite 000-default
 a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.3-fpm
-enable_and_start_service apache2
 
-log "Настройка Memcached..."
+systemctl restart apache2
+systemctl enable apache2
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Apache успешно запущен"
+
+# Memcached
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Memcached..."
 sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf
-enable_and_start_service memcached
+systemctl restart memcached
+systemctl enable memcached
 
-# 5. MySQL Master
-log "Настройка MySQL Master..."
-download_config "configs/mysql/master.cnf" "/etc/mysql/mysql.conf.d/master.cnf"
+# MySQL Master
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка MySQL Master..."
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/mysql/master.cnf \
+    -o /etc/mysql/mysql.conf.d/master.cnf
+
 systemctl restart mysql
 
 mysql -e "
@@ -65,17 +83,26 @@ GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
 "
 
-# 6. WP-CLI + WordPress
-log "Установка WP-CLI..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] MySQL Master настроен"
+
+# WP-CLI
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка WP-CLI..."
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 mv wp-cli.phar /usr/local/bin/wp
 
-log "Установка WordPress файлов..."
-install_wordpress_files
-
+# WordPress
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка WordPress файлов..."
+mkdir -p /var/www/html/wordpress
 cd /var/www/html/wordpress
 
+if [ ! -f wp-config-sample.php ]; then
+    wget -q https://ru.wordpress.org/latest-ru_RU.tar.gz
+    tar -xzf latest-ru_RU.tar.gz --strip-components=1
+    rm latest-ru_RU.tar.gz
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Создаём wp-config.php..."
 wp config create \
     --dbname=wordpress \
     --dbuser=wpuser \
@@ -86,6 +113,7 @@ wp config create \
     --skip-check \
     --allow-root
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Устанавливаем WordPress автоматически..."
 wp core install \
     --url=http://192.168.88.168 \
     --title="Мой личный блог" \
@@ -99,66 +127,73 @@ wp core install \
 chown -R www-data:www-data /var/www/html/wordpress
 chmod -R 755 /var/www/html/wordpress
 
-log "✅ WordPress установлен полностью автоматически!"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] WordPress установлен полностью автоматически"
 
-# 7. Prometheus + Node Exporter
-log "Установка Prometheus + Node Exporter..."
-check_and_install prometheus prometheus-node-exporter
-download_config "configs/prometheus/prometheus.yml" "/etc/prometheus/prometheus.yml"
+# Prometheus + Node Exporter
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Prometheus + Node Exporter..."
+apt-get install -y prometheus prometheus-node-exporter
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/prometheus/prometheus.yml \
+    -o /etc/prometheus/prometheus.yml
+
 systemctl restart prometheus prometheus-node-exporter
-enable_and_start_service prometheus prometheus-node-exporter
+systemctl enable prometheus prometheus-node-exporter
 
-# 8. Grafana + АВТОМАТИЧЕСКИЙ ДАШБОРД
-log "Установка Grafana..."
+# Grafana + ДАШБОРД
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Grafana..."
 if ! dpkg -l | grep -q grafana; then
     wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
     dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
 fi
-enable_and_start_service grafana-server
 
-download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
+systemctl enable --now grafana-server
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/grafana/provisioning/datasources/prometheus.yml \
+    -o /etc/grafana/provisioning/datasources/prometheus.yml
+
 systemctl restart grafana-server
 
-# Создаём автоматический дашборд через API
-log "Создаём автоматический дашборд в Grafana..."
-sleep 10  # даём Grafana время запуститься
+# Автоматическое создание дашборда
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Создаём дашборд в Grafana..."
+sleep 15
 
-cat > /tmp/otus-dashboard.json << 'EOF'
+cat > /tmp/otus-dashboard.json << 'EOD'
 {
   "dashboard": {
-    "id": null,
     "uid": "otus-wordpress",
     "title": "OTUS WordPress Infrastructure",
     "tags": ["wordpress", "otus"],
     "timezone": "browser",
     "panels": [
       {
-        "title": "CPU Usage",
+        "title": "CPU Usage %",
         "type": "stat",
-        "targets": [{ "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{instance}}" }]
+        "targets": [{"expr": "100 - avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100"}],
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
       },
       {
-        "title": "Memory Available",
+        "title": "Memory Available (GB)",
         "type": "stat",
-        "targets": [{ "expr": "node_memory_MemAvailable_bytes", "legendFormat": "{{instance}}" }]
+        "targets": [{"expr": "node_memory_MemAvailable_bytes / (1024*1024*1024)"}],
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}
       },
       {
-        "title": "Load Average",
+        "title": "Load Average (1m)",
         "type": "stat",
-        "targets": [{ "expr": "node_load1", "legendFormat": "Load 1m" }]
+        "targets": [{"expr": "node_load1"}],
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}
       },
       {
-        "title": "Disk Usage",
+        "title": "Disk Usage Root %",
         "type": "stat",
-        "targets": [{ "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/\"} * 100) / node_filesystem_size_bytes{mountpoint=\"/\"})", "legendFormat": "Root %" }]
+        "targets": [{"expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})"}],
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0}
       }
-    ],
-    "time": { "from": "now-30m", "to": "now" }
+    ]
   },
-  "folderUid": "general",
   "overwrite": true
 }
-EOF
+EOD
 
 curl -X POST http://admin:admin@localhost:3000/api/dashboards/db \
   -H "Content-Type: application/json" \
@@ -166,10 +201,10 @@ curl -X POST http://admin:admin@localhost:3000/api/dashboards/db \
 
 rm -f /tmp/otus-dashboard.json
 
-log "✅ Автоматический дашборд 'OTUS WordPress Infrastructure' создан в Grafana"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Дашборд 'OTUS WordPress Infrastructure' создан автоматически"
 
-# 9. ELK Stack
-log "Установка ELK Stack через Docker..."
+# ELK Stack
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка ELK Stack..."
 mkdir -p /opt/elk
 
 cat > /opt/elk/docker-compose.yml << 'EOF'
@@ -181,12 +216,8 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
       - "9200:9200"
-    ulimits:
-      memlock: -1
-      nofile: 65536
     restart: unless-stopped
 
   kibana:
@@ -234,9 +265,8 @@ EOF
 cd /opt/elk
 docker compose down || true
 docker compose up -d
-log "ELK Stack запущен"
 
-# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
+# ФИНАЛЬНЫЙ ОТЧЁТ
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
@@ -245,14 +275,10 @@ echo "WordPress:     http://192.168.88.168"
 echo "   Логин:      admin"
 echo "   Пароль:     AdminPassword2026Strong!"
 echo ""
-echo "Grafana:       http://192.168.88.168:3000   (admin / admin)"
+echo "Grafana:       http://192.168.88.168:3000"
 echo "               Дашборд 'OTUS WordPress Infrastructure' создан автоматически"
 echo "Kibana:        http://192.168.88.168:5601"
 echo "Elasticsearch: http://192.168.88.168:9200"
-echo ""
-echo "MySQL:"
-echo "   wpuser / WpPassword2026Strong!"
-echo "   repl  / ReplPassword2026Strong!"
 echo "=================================================================="
 
-log "Master восстановлен успешно с автоматическим дашбордом в Grafana."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Master восстановлен успешно."
