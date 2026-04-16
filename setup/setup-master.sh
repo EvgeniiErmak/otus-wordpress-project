@@ -1,62 +1,82 @@
 #!/bin/bash
-# setup/setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ. WP-CLI устанавливается до использования wp
+# setup/setup-master.sh — МАКСИМАЛЬНО ПОЛНЫЙ ВАРИАНТ БЕЗ СОКРАЩЕНИЙ
+# Всё делается по порядку, ничего не пропущено, всё явно.
 
 set -euo pipefail
 
-source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] === ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
+# ======================== 1. ОБНОВЛЕНИЕ СИСТЕМЫ ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Обновление списков пакетов..."
+apt-get update -qq
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
-log "Установка базовых пакетов..."
-for pkg in curl wget git unzip ca-certificates gnupg apt-transport-https software-properties-common; do
-    check_and_install "$pkg"
-done
+# ======================== 2. БАЗОВЫЕ ПАКЕТЫ ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка базовых пакетов..."
+apt-get install -y curl wget git unzip ca-certificates gnupg apt-transport-https software-properties-common
 
-# ======================== DOCKER ========================
-log "Установка Docker..."
+# ======================== 3. DOCKER ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Docker..."
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sh
     systemctl enable --now docker
 fi
-check_and_install docker-compose-plugin
+apt-get install -y docker-compose-plugin
 
-# ======================== NGINX ========================
-log "Настройка Nginx reverse proxy..."
-check_and_install nginx
-download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
-ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
+# ======================== 4. NGINX REVERSE PROXY ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка и настройка Nginx..."
+apt-get install -y nginx
+
+# Скачиваем конфиг Nginx
+mkdir -p /etc/nginx/sites-available
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/nginx/reverse-proxy.conf \
+    -o /etc/nginx/sites-available/default
+
+ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+
 nginx -t && systemctl restart nginx
-enable_and_start_service nginx
+systemctl enable nginx
 
-# ======================== LAMP + MEMCACHED + MYSQL ========================
-log "Установка Apache + PHP 8.3 + Memcached + MySQL..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Nginx успешно запущен"
+
+# ======================== 5. LAMP СТЕК (Apache + PHP + Memcached + MySQL) ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Apache + PHP 8.3 + Memcached + MySQL..."
 apt-get install -y apache2 \
     php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip \
     memcached mysql-server
 
-# Apache на порт 8080
-log "Настройка Apache на порт 8080..."
+# Apache слушает порт 8080
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Apache на порт 8080..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
 
-download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
+# Скачиваем конфиг сайта WordPress
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/apache/wordpress.conf \
+    -o /etc/apache2/sites-available/wordpress.conf
+
 a2ensite wordpress
 a2dissite 000-default
 a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.3-fpm
-enable_and_start_service apache2
+
+systemctl restart apache2
+systemctl enable apache2
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Apache успешно запущен на порту 8080"
 
 # Memcached
-log "Настройка Memcached..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Memcached..."
 sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf
-enable_and_start_service memcached
+systemctl restart memcached
+systemctl enable memcached
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Memcached успешно запущен"
 
-# ======================== MySQL MASTER ========================
-log "Настройка MySQL Master..."
-download_config "configs/mysql/master.cnf" "/etc/mysql/mysql.conf.d/master.cnf"
+# ======================== 6. MySQL MASTER ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка MySQL Master..."
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/mysql/master.cnf \
+    -o /etc/mysql/mysql.conf.d/master.cnf
+
 systemctl restart mysql
 
 mysql -e "
@@ -67,22 +87,29 @@ CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'R
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
 "
-log "MySQL Master настроен."
 
-# ======================== WP-CLI (ВАЖНО: УСТАНАВЛИВАЕМ ЗДЕСЬ!) ========================
-log "Установка WP-CLI..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] MySQL Master настроен. Пользователи wpuser и repl созданы."
+
+# ======================== 7. WP-CLI ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка WP-CLI..."
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 mv wp-cli.phar /usr/local/bin/wp
-log "WP-CLI установлен."
 
-# ======================== WORDPRESS ========================
-log "Установка файлов WordPress..."
-install_wordpress_files
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] WP-CLI установлен."
 
+# ======================== 8. WORDPRESS ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка файлов WordPress..."
+mkdir -p /var/www/html/wordpress
 cd /var/www/html/wordpress
 
-log "Создаём wp-config.php..."
+if [ ! -f wp-config-sample.php ]; then
+    wget -q https://ru.wordpress.org/latest-ru_RU.tar.gz
+    tar -xzf latest-ru_RU.tar.gz --strip-components=1
+    rm latest-ru_RU.tar.gz
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Создаём wp-config.php..."
 wp config create \
     --dbname=wordpress \
     --dbuser=wpuser \
@@ -90,9 +117,10 @@ wp config create \
     --dbhost=localhost \
     --locale=ru_RU \
     --force \
-    --skip-check
+    --skip-check \
+    --allow-root
 
-log "Устанавливаем WordPress автоматически..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Устанавливаем WordPress автоматически..."
 wp core install \
     --url=http://192.168.88.168 \
     --title="Мой личный блог" \
@@ -100,33 +128,40 @@ wp core install \
     --admin_password=AdminPassword2026Strong! \
     --admin_email=admin@example.com \
     --locale=ru_RU \
-    --skip-email
+    --skip-email \
+    --allow-root
 
-log "Настраиваем права..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настраиваем права на файлы..."
 chown -R www-data:www-data /var/www/html/wordpress
 chmod -R 755 /var/www/html/wordpress
 
-log "✅ WordPress установлен полностью автоматически!"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ WordPress установлен полностью автоматически!"
 
-# ======================== МОНИТОРИНГ ========================
-log "Настройка Prometheus + Node Exporter..."
-check_and_install prometheus prometheus-node-exporter
-download_config "configs/prometheus/prometheus.yml" "/etc/prometheus/prometheus.yml"
+# ======================== 9. МОНИТОРИНГ ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Prometheus + Node Exporter..."
+apt-get install -y prometheus prometheus-node-exporter
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/prometheus/prometheus.yml \
+    -o /etc/prometheus/prometheus.yml
+
 systemctl restart prometheus prometheus-node-exporter
-enable_and_start_service prometheus prometheus-node-exporter
+systemctl enable prometheus prometheus-node-exporter
 
-# Grafana
-log "Установка Grafana..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Grafana..."
 if ! dpkg -l | grep -q grafana; then
     wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
     dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
 fi
-enable_and_start_service grafana-server
-download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
+
+systemctl enable --now grafana-server
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/grafana/provisioning/datasources/prometheus.yml \
+    -o /etc/grafana/provisioning/datasources/prometheus.yml
+
 systemctl restart grafana-server
 
-# ======================== ELK ========================
-log "Установка ELK Stack через Docker..."
+# ======================== 10. ELK STACK ========================
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка ELK Stack через Docker..."
 mkdir -p /opt/elk
 
 cat > /opt/elk/docker-compose.yml << 'EOF'
@@ -191,25 +226,26 @@ EOF
 cd /opt/elk
 docker compose down || true
 docker compose up -d
-log "ELK запущен"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ELK Stack запущен"
 
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
 echo "✅ УСТАНОВКА НА MASTER ЗАВЕРШЕНА УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress:"
-echo "   URL:      http://192.168.88.168"
-echo "   Логин:    admin"
-echo "   Пароль:   AdminPassword2026Strong!"
+echo "WordPress:     http://192.168.88.168"
+echo "   Логин:      admin"
+echo "   Пароль:     AdminPassword2026Strong!"
 echo ""
-echo "Grafana:      http://192.168.88.168:3000   (admin / admin)"
-echo "Kibana:       http://192.168.88.168:5601"
-echo "Elasticsearch:http://192.168.88.168:9200"
+echo "Nginx:         http://192.168.88.168 (reverse proxy)"
+echo "Grafana:       http://192.168.88.168:3000   (admin / admin)"
+echo "Kibana:        http://192.168.88.168:5601"
+echo "Elasticsearch: http://192.168.88.168:9200"
 echo ""
 echo "MySQL:"
 echo "   wpuser / WpPassword2026Strong!"
 echo "   repl  / ReplPassword2026Strong!"
 echo "=================================================================="
 
-log "Master восстановлен успешно."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Master восстановлен успешно."
