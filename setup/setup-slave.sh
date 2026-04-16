@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (фикс rsync + репликация)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (фикс rsync + порядок пакетов)
 
 set -euo pipefail
 
@@ -39,16 +39,17 @@ log "Настройка firewall..."
 ufw allow 22 80 8080 9100 3306 || true
 ufw --force enable || true
 
-# LAMP стек
+# LAMP стек (Apache первым!)
 log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
 apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache
-log "Настройка Apache на порт 8080..."
+# Apache на 8080
+log "Настройка Apache..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
+
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -83,16 +84,17 @@ START SLAVE;
 sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# WordPress + синхронизация
+# ======================== WORDPRESS ========================
 log "Установка WordPress файлов..."
 mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
+# Синхронизация
 log "Настройка синхронизации файлов..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
-  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10" \
+  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15" \
   root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
 chown -R www-data:www-data /var/www/html/wordpress
 echo "[$(date)] Синхронизация WP файлов выполнена" >> /var/log/wp-sync.log
@@ -100,6 +102,7 @@ EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
+
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
 # Node Exporter
@@ -107,9 +110,10 @@ log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# Filebeat (простой)
+# Filebeat простой
 log "Filebeat простой режим..."
 mkdir -p /opt/filebeat
+
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
@@ -172,7 +176,7 @@ echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168"
 echo "Node Exporter: http://192.168.88.167:9100/metrics"
-echo "Kibana:        http://192.168.88.168:5601  (logs-*)"
+echo "Kibana:        http://192.168.88.168:5601 → logs-*"
 echo ""
 echo "Проверь индексы:"
 echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
