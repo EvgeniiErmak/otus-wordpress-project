@@ -164,12 +164,27 @@ EOF
 systemctl restart prometheus prometheus-node-exporter || true
 enable_and_start_service prometheus prometheus-node-exporter
 
-# ======================== 9. GRAFANA + ДАШБОРД ========================
+# ======================== 8. GRAFANA + ДАШБОРД ========================
 log "Установка Grafana..."
+
+# Добавляем репозиторий Grafana (быстрее и надежнее чем wget)
 if ! dpkg -l | grep -q grafana; then
-    wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
-    dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
+    log "Добавляем GPG ключ Grafana..."
+    wget -q -O - https://packages.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/grafana.gpg > /dev/null
+    
+    log "Добавляем репозиторий Grafana..."
+    echo "deb https://packages.grafana.com/oss/deb stable main" | tee -a /etc/apt/sources.list.d/grafana.list
+    
+    log "Устанавливаем Grafana..."
+    apt-get update -qq
+    apt-get install -y grafana || {
+        log "⚠️ Установка из репозитория не удалась, пробуем wget..."
+        wget --timeout=300 --tries=3 -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
+        dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
+        rm -f grafana_11.5.2_amd64.deb
+    }
 fi
+
 enable_and_start_service grafana-server
 
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
