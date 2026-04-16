@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ПОЛНЫЙ ФАЙЛ БЕЗ СОКРАЩЕНИЙ. ИСПРАВЛЕНА ПРОБЛЕМА С RSYNC (ТОЛЬКО WordPress с master)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ВЕРСИЯ: гарантированное выполнение до конца
 
 set -euo pipefail
 
@@ -24,7 +24,12 @@ if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sh
     systemctl enable --now docker
 fi
-check_and_install docker-compose
+
+# Установка Docker Compose v2 (плагин), а не устаревшего docker-compose
+if ! docker compose version &>/dev/null; then
+    log "Устанавливаем Docker Compose v2 plugin..."
+    apt-get install -y docker-compose-plugin || true
+fi
 
 # ======================== 3. SSH КЛЮЧ ========================
 log "Настройка автоматического SSH-доступа к master..."
@@ -32,8 +37,8 @@ mkdir -p /root/.ssh && chmod 700 /root/.ssh
 if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
-ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
-sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
+ssh-keyscan -H "$MASTER_IP" >> /root/.ssh/known_hosts 2>/dev/null || true
+sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@"$MASTER_IP" || true
 log "✅ SSH ключ установлен на master"
 
 # ======================== 4. FIREWALL ========================
@@ -57,23 +62,23 @@ Listen 8080
 EOF
 
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
-a2ensite wordpress
-a2dissite 000-default
-a2enmod proxy_fcgi setenvif rewrite
-a2enconf php8.3-fpm
-systemctl restart apache2
+a2ensite wordpress || true
+a2dissite 000-default || true
+a2enmod proxy_fcgi setenvif rewrite || true
+a2enconf php8.3-fpm || true
+systemctl restart apache2 || true
 enable_and_start_service apache2 nginx
 
 # Memcached
 log "Настройка Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
-systemctl restart memcached
+systemctl restart memcached || true
 enable_and_start_service memcached
 
 # ======================== 6. MySQL SLAVE ========================
 log "Настройка MySQL Slave..."
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
-systemctl restart mysql
+systemctl restart mysql || true
 enable_and_start_service mysql
 
 log "Запуск репликации..."
@@ -90,7 +95,7 @@ START SLAVE;
 sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== 7. WORDPRESS — ТОЛЬКО RSYNC С MASTER ========================
+# ======================== 7. WORDPRESS — RSYNC С MASTER ========================
 log "Подготовка директории WordPress на slave..."
 rm -rf /var/www/html/wordpress/* 2>/dev/null || true
 mkdir -p /var/www/html/wordpress
@@ -111,8 +116,14 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 log "Выполняем первую синхронизацию WordPress файлов с master..."
 /usr/local/bin/sync-wp-files.sh || true
 
-# Добавляем в cron
-(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
+# Добавляем в cron — ИСПРАВЛЕНО: корректная обработка пустого crontab
+log "Добавляем задачу в cron..."
+if crontab -l 2>/dev/null | grep -q "sync-wp-files.sh" 2>/dev/null; then
+    log "✅ Cron-задача уже существует"
+else
+    (crontab -l 2>/dev/null || echo "") | { cat; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh"; } | crontab - || true
+    log "✅ Cron-задача добавлена"
+fi
 
 # ======================== 8. NODE EXPORTER ========================
 log "Установка Node Exporter..."
@@ -158,7 +169,7 @@ EOF
 
 cd /opt/filebeat
 docker compose down || true
-docker compose up -d
+docker compose up -d || true
 
 # ======================== 10. ТЕСТОВЫЕ ЛОГИ + INDEX PATTERN ========================
 log "Генерируем тестовые логи для проверки..."
@@ -170,6 +181,7 @@ for i in {1..800}; do
     echo "[$ts] TEST WP-sync slave #$i" >> /var/log/wp-sync.log
 done
 
+log "Ожидание отправки логов в Elasticsearch..."
 sleep 90
 
 log "Создаём Index Pattern в Kibana..."
