@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ПОЛНЫЙ ФАЙЛ. ИСПРАВЛЕНА ПРОБЛЕМА С RSYNC (только WordPress)
+# setup/setup-slave.sh — ПОЛНЫЙ ФАЙЛ БЕЗ СОКРАЩЕНИЙ. ИСПРАВЛЕНА ПРОБЛЕМА С RSYNC (ТОЛЬКО WordPress с master)
 
 set -euo pipefail
 
