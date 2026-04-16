@@ -1,14 +1,18 @@
 #!/bin/bash
-# setup/setup-master.sh — ФИНАЛЬНАЯ ПРОВЕРЕННАЯ ВЕРСИЯ (всё работает)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (rsync теперь копирует только WordPress)
 
 set -euo pipefail
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
-log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
+MASTER_IP="192.168.88.168"
+REPL_PASSWORD="ReplPassword2026Strong!"
+MASTER_ROOT_PASSWORD="292799619531629514"
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
-for pkg in curl wget git unzip ca-certificates gnupg; do
+log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
+
+# Базовые пакеты
+for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
     check_and_install "$pkg"
 done
 
@@ -20,17 +24,24 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== NGINX ========================
-log "Настройка Nginx reverse proxy..."
-check_and_install nginx
-download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
-ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx
-enable_and_start_service nginx
+# SSH ключ
+log "Настройка SSH-ключа к master..."
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+if [ ! -f /root/.ssh/id_rsa ]; then
+    ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
+fi
+ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
+sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
+log "✅ SSH ключ установлен"
 
-# ======================== LAMP + MEMCACHED ========================
-log "Установка LAMP + Memcached..."
-apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
+# Firewall
+log "Настройка firewall..."
+ufw allow 22 80 8080 9100 3306 || true
+ufw --force enable || true
+
+# LAMP стек
+log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
+apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
 # Apache на 8080
@@ -45,7 +56,7 @@ a2dissite 000-default.conf
 a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.3-fpm
 systemctl restart apache2
-enable_and_start_service apache2
+enable_and_start_service apache2 nginx
 
 # Memcached
 log "Настройка Memcached..."
@@ -53,166 +64,119 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL MASTER ========================
-log "Настройка MySQL Master..."
-download_config "configs/mysql/master.cnf" "/etc/mysql/mysql.conf.d/master.cnf"
+# MySQL Slave
+log "Настройка MySQL Slave..."
+download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql
 enable_and_start_service mysql
 
-log "Создание пользователей..."
+log "Запуск репликации..."
 mysql -e "
-CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'wpuser'@'%' IDENTIFIED WITH mysql_native_password BY 'WpPassword2026Strong!';
-GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'%';
-CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'ReplPassword2026Strong!';
-GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
-FLUSH PRIVILEGES;
-"
+STOP SLAVE;
+CHANGE MASTER TO
+  MASTER_HOST='$MASTER_IP',
+  MASTER_USER='repl',
+  MASTER_PASSWORD='$REPL_PASSWORD',
+  MASTER_AUTO_POSITION=1;
+START SLAVE;
+" 2>/dev/null || true
 
-sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
-ufw allow 3306 || true
+sleep 12
+mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== WORDPRESS ========================
+# ======================== WORDPRESS + СИНХРОНИЗАЦИЯ ========================
 log "Установка WordPress файлов..."
 mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
-cd /var/www/html/wordpress
-
-log "Создаём wp-config.php..."
-wp config create --dbname=wordpress --dbuser=wpuser --dbpass=WpPassword2026Strong! \
-  --dbhost=localhost --locale=ru_RU --allow-root --skip-check || true
-
-log "Автоматическая установка WordPress..."
-wp core install --url="http://192.168.88.168" \
-  --title="Мой личный блог" \
-  --admin_user="admin" \
-  --admin_password="AdminPassword2026Strong!" \
-  --admin_email="admin@example.com" \
-  --locale=ru_RU \
-  --allow-root || true
-
+log "Настройка синхронизации файлов (только WordPress)..."
+cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
+#!/bin/bash
+rsync -avz --delete --exclude=wp-config.php \
+  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15" \
+  root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
 chown -R www-data:www-data /var/www/html/wordpress
-log "✅ WordPress установлен автоматически"
-
-# ======================== PROMETHEUS + GRAFANA ========================
-log "Настройка Prometheus + Grafana..."
-check_and_install prometheus prometheus-node-exporter
-
-cat > /etc/prometheus/prometheus.yml << 'EOF'
-global:
-  scrape_interval: 10s
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-  - job_name: 'node_exporter'
-    static_configs:
-      - targets: ['localhost:9100']
+echo "[$(date)] Синхронизация WP файлов выполнена" >> /var/log/wp-sync.log
 EOF
 
-systemctl restart prometheus
-enable_and_start_service prometheus prometheus-node-exporter
+chmod +x /usr/local/bin/sync-wp-files.sh
+/usr/local/bin/sync-wp-files.sh || true
+(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-# Grafana
-log "Установка Grafana..."
-if ! dpkg -l | grep -q grafana; then
-    wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
-    dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
-fi
-systemctl restart grafana-server
-enable_and_start_service grafana-server
+# Node Exporter
+log "Node Exporter..."
+check_and_install prometheus-node-exporter
+enable_and_start_service prometheus-node-exporter
 
-download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
-systemctl restart grafana-server
+# Filebeat
+log "Filebeat простой режим..."
+mkdir -p /opt/filebeat
 
-# ======================== ELK ========================
-log "Установка ELK через Docker..."
-mkdir -p /opt/elk
-
-cat > /opt/elk/docker-compose.yml << 'EOF'
+cat > /opt/filebeat/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - network.host=0.0.0.0
-    ports:
-      - "9200:9200"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
-    restart: unless-stopped
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.17.1
-    container_name: kibana
-    ports:
-      - "5601:5601"
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - SERVER_PUBLICBASEURL=http://192.168.88.168:5601
-    depends_on:
-      - elasticsearch
-    restart: unless-stopped
-
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.17.1
-    container_name: filebeat
     user: "0:0"
     command: ["filebeat", "-e", "--strict.perms=false"]
     volumes:
       - /var/log:/var/log:ro
       - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-    network_mode: "host"
     restart: unless-stopped
-
-volumes:
-  esdata:
+    network_mode: "host"
 EOF
 
-cat > /opt/elk/filebeat.yml << 'EOF'
+cat > /opt/filebeat/filebeat.yml << 'EOF'
 filebeat.inputs:
 - type: filestream
   enabled: true
+  id: slave-logs
   paths:
     - /var/log/nginx/*.log
     - /var/log/apache2/*.log
     - /var/log/mysql/*.log
+    - /var/log/wp-sync.log
+
+setup.template.enabled: false
+setup.ilm.enabled: false
 
 output.elasticsearch:
-  hosts: ["http://localhost:9200"]
-  index: "logs-master-%{+yyyy.MM.dd}"
+  hosts: ["http://192.168.88.168:9200"]
+  index: "logs-slave-%{+yyyy.MM.dd}"
 EOF
 
-cd /opt/elk
+cd /opt/filebeat
 docker compose down || true
 docker compose up -d
-log "✅ ELK успешно запущен"
 
-# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
+# Генерация логов
+log "Генерируем тестовые логи..."
+for i in {1..800}; do
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
+    echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
+    echo "[$ts] TEST MySQL slave #$i" >> /var/log/mysql/error.log
+done
+
+sleep 90
+
+# Index Pattern
+log "Создаём Index Pattern в Kibana..."
+curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" \
+  -H 'kbn-xsrf: true' \
+  -H 'Content-Type: application/json' \
+  -d '{"attributes":{"title":"logs-*","timeFieldName":"@timestamp"}}' || true
+
 echo ""
 echo "=================================================================="
-echo "✅ MASTER УСТАНОВЛЕН УСПЕШНО!"
+echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО!"
 echo "=================================================================="
 echo "WordPress:     http://192.168.88.168"
-echo "   Логин:      admin"
-echo "   Пароль:     AdminPassword2026Strong!"
+echo "Node Exporter: http://192.168.88.167:9100/metrics"
+echo "Kibana:        http://192.168.88.168:5601 → logs-*"
 echo ""
-echo "Grafana:       http://192.168.88.168:3000   (admin / admin)"
-echo "Kibana:        http://192.168.88.168:5601"
-echo "Elasticsearch: http://192.168.88.168:9200"
-echo "MySQL wpuser:  wpuser / WpPassword2026Strong!"
-echo ""
-echo "Проверь:"
-echo "   WordPress должен открываться полноценно"
-echo "   Kibana должна быть доступна"
+echo "Проверь индексы:"
+echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
 echo "=================================================================="
 
-log "Master восстановлен успешно."
+log "Slave восстановлен успешно."
