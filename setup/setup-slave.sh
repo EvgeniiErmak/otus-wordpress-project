@@ -149,7 +149,7 @@ docker compose up -d
 
 # Генерация логов
 log "Генерируем тестовые логи..."
-for i in {1..800}; do
+for i in {1..100}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
     echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
