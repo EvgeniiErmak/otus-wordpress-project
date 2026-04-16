@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup/setup-slave.sh — ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ ИСПРАВЛЕННЫЙ ВАРИАНТ
-# rsync теперь строго копирует ТОЛЬКО /var/www/html/wordpress/ с master
+# rsync копирует ТОЛЬКО WordPress с master, без grafana.deb и корня
 
 set -euo pipefail
 
@@ -91,14 +91,11 @@ START SLAVE;
 sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== 7. WORDPRESS + ИСПРАВЛЕННЫЙ RSYNC ========================
+# ======================== 7. WORDPRESS — ТОЛЬКО RSYNC С MASTER ========================
 log "Подготовка директории WordPress..."
 mkdir -p /var/www/html/wordpress
 
-log "Установка WordPress файлов локально (на всякий случай)..."
-install_wordpress_files
-
-log "Настройка синхронизации файлов (ТОЛЬКО WordPress)..."
+log "Настройка синхронизации файлов (ТОЛЬКО WordPress с master)..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
@@ -111,11 +108,11 @@ EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
 
-# Выполняем синхронизацию сразу
-log "Выполняем первую синхронизацию WordPress файлов..."
+# Первая синхронизация
+log "Выполняем первую синхронизацию WordPress файлов с master..."
 /usr/local/bin/sync-wp-files.sh || true
 
-# Добавляем в cron
+# Cron
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
 # ======================== 8. NODE EXPORTER ========================
