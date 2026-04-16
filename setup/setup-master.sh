@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-master.sh — ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ (WP-CLI установлен + WordPress полностью автоматический)
+# setup/setup-master.sh — ФИНАЛЬНАЯ ВЕРСИЯ. WP-CLI устанавливается до использования wp
 
 set -euo pipefail
 
@@ -67,14 +67,14 @@ CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'R
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
 "
+log "MySQL Master настроен."
 
-log "MySQL Master настроен. Пользователи wpuser и repl созданы."
-
-# ======================== WP-CLI ========================
+# ======================== WP-CLI (ВАЖНО: УСТАНАВЛИВАЕМ ЗДЕСЬ!) ========================
 log "Установка WP-CLI..."
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 mv wp-cli.phar /usr/local/bin/wp
+log "WP-CLI установлен."
 
 # ======================== WORDPRESS ========================
 log "Установка файлов WordPress..."
@@ -115,6 +115,7 @@ download_config "configs/prometheus/prometheus.yml" "/etc/prometheus/prometheus.
 systemctl restart prometheus prometheus-node-exporter
 enable_and_start_service prometheus prometheus-node-exporter
 
+# Grafana
 log "Установка Grafana..."
 if ! dpkg -l | grep -q grafana; then
     wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
@@ -190,7 +191,7 @@ EOF
 cd /opt/elk
 docker compose down || true
 docker compose up -d
-log "ELK Stack запущен"
+log "ELK запущен"
 
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
