@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup/setup-slave.sh — ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ ИСПРАВЛЕННЫЙ ВАРИАНТ
-# rsync теперь копирует ТОЛЬКО WordPress, порядок пакетов правильный
+# rsync теперь строго копирует ТОЛЬКО /var/www/html/wordpress/ с master
 
 set -euo pipefail
 
@@ -91,11 +91,11 @@ START SLAVE;
 sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== 7. WORDPRESS + ПРАВИЛЬНЫЙ RSYNC ========================
-log "Установка и синхронизация WordPress файлов..."
+# ======================== 7. WORDPRESS + ИСПРАВЛЕННЫЙ RSYNC ========================
+log "Подготовка директории WordPress..."
 mkdir -p /var/www/html/wordpress
 
-# Устанавливаем файлы локально (на всякий случай)
+log "Установка WordPress файлов локально (на всякий случай)..."
 install_wordpress_files
 
 log "Настройка синхронизации файлов (ТОЛЬКО WordPress)..."
@@ -110,6 +110,9 @@ echo "[$(date)] Синхронизация WP файлов выполнена" >
 EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
+
+# Выполняем синхронизацию сразу
+log "Выполняем первую синхронизацию WordPress файлов..."
 /usr/local/bin/sync-wp-files.sh || true
 
 # Добавляем в cron
@@ -163,7 +166,7 @@ docker compose up -d
 
 # ======================== 10. ТЕСТОВЫЕ ЛОГИ + INDEX PATTERN ========================
 log "Генерируем тестовые логи для проверки..."
-for i in {1..50}; do
+for i in {1..800}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
     echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
