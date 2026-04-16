@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (фикс rsync + порядок пакетов)
+# setup/setup-slave.sh — РАБОЧИЙ ВАРИАНТ (исправлен rsync + SSH + порядок пакетов)
 
 set -euo pipefail
 
@@ -9,7 +9,7 @@ MASTER_IP="192.168.88.168"
 REPL_PASSWORD="ReplPassword2026Strong!"
 MASTER_ROOT_PASSWORD="292799619531629514"
 
-log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
+log "=== ФИНАЛЬНАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
 # Базовые пакеты
 for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
@@ -24,7 +24,7 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# SSH ключ
+# SSH ключ (автоматически)
 log "Настройка SSH-ключа к master..."
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 if [ ! -f /root/.ssh/id_rsa ]; then
@@ -39,12 +39,12 @@ log "Настройка firewall..."
 ufw allow 22 80 8080 9100 3306 || true
 ufw --force enable || true
 
-# LAMP стек (Apache первым!)
+# LAMP стек
 log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
 apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache на 8080
+# Apache
 log "Настройка Apache..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
@@ -89,12 +89,12 @@ log "Установка WordPress файлов..."
 mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
-# Синхронизация
+# Синхронизация (исправленный rsync)
 log "Настройка синхронизации файлов..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
-  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15" \
+  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=20" \
   root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
 chown -R www-data:www-data /var/www/html/wordpress
 echo "[$(date)] Синхронизация WP файлов выполнена" >> /var/log/wp-sync.log
@@ -102,7 +102,6 @@ EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
-
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
 # Node Exporter
@@ -110,7 +109,7 @@ log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# Filebeat простой
+# Filebeat (простой)
 log "Filebeat простой режим..."
 mkdir -p /opt/filebeat
 
@@ -153,7 +152,7 @@ docker compose up -d
 
 # Генерация логов
 log "Генерируем тестовые логи..."
-for i in {1..100}; do
+for i in {1..800}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
     echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
@@ -163,7 +162,7 @@ done
 sleep 90
 
 # Index Pattern
-log "Создаём Index Pattern..."
+log "Создаём Index Pattern в Kibana..."
 curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" \
   -H 'kbn-xsrf: true' \
   -H 'Content-Type: application/json' \
