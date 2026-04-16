@@ -1,6 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ ИСПРАВЛЕННЫЙ ВАРИАНТ (2026-04-16)
-# rsync копирует ТОЛЬКО WordPress с master. Локальная установка файлов на slave УБРАНА.
+# setup/setup-slave.sh — ПОЛНЫЙ ФАЙЛ. ИСПРАВЛЕНА ПРОБЛЕМА С RSYNC (только WordPress)
 
 set -euo pipefail
 
@@ -93,6 +92,7 @@ mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" |
 
 # ======================== 7. WORDPRESS — ТОЛЬКО RSYNC С MASTER ========================
 log "Подготовка директории WordPress на slave..."
+rm -rf /var/www/html/wordpress/* 2>/dev/null || true
 mkdir -p /var/www/html/wordpress
 
 log "Настройка синхронизации файлов (ТОЛЬКО WordPress с master)..."
@@ -108,7 +108,6 @@ EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
 
-# Первая синхронизация сразу после настройки
 log "Выполняем первую синхронизацию WordPress файлов с master..."
 /usr/local/bin/sync-wp-files.sh || true
 
