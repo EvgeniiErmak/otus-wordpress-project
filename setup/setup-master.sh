@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-master.sh — МАКСИМАЛЬНО ПОЛНЫЙ ВАРИАНТ С ДАШБОРДОМ GRAFANA
+# setup/setup-master.sh — МАКСИМАЛЬНО ПОЛНЫЙ ВАРИАНТ С ДАШБОРДОМ (без сокращений)
 
 set -euo pipefail
 
@@ -21,7 +21,10 @@ apt-get install -y docker-compose-plugin
 # 3. NGINX REVERSE PROXY
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка и настройка Nginx..."
 apt-get install -y nginx
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/nginx/reverse-proxy.conf -o /etc/nginx/sites-available/default
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/nginx/reverse-proxy.conf \
+    -o /etc/nginx/sites-available/default
+
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 systemctl enable nginx
@@ -39,11 +42,15 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Apache на порт 808
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/apache/wordpress.conf -o /etc/apache2/sites-available/wordpress.conf
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/apache/wordpress.conf \
+    -o /etc/apache2/sites-available/wordpress.conf
+
 a2ensite wordpress
 a2dissite 000-default
 a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.3-fpm
+
 systemctl restart apache2
 systemctl enable apache2
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Apache успешно запущен"
@@ -53,10 +60,13 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка Memcached..."
 sed -i 's/-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf
 systemctl restart memcached
 systemctl enable memcached
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Memcached успешно запущен"
 
 # MySQL Master
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настройка MySQL Master..."
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/mysql/master.cnf -o /etc/mysql/mysql.conf.d/master.cnf
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/mysql/master.cnf \
+    -o /etc/mysql/mysql.conf.d/master.cnf
+
 systemctl restart mysql
 
 mysql -e "
@@ -67,15 +77,17 @@ CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'R
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
 "
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] MySQL Master настроен."
 
 # WP-CLI
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка WP-CLI..."
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 mv wp-cli.phar /usr/local/bin/wp
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] WP-CLI установлен."
 
-# WordPress
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка WordPress..."
+# WORDPRESS — ПОЛНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка файлов WordPress..."
 mkdir -p /var/www/html/wordpress
 cd /var/www/html/wordpress
 
@@ -85,6 +97,7 @@ if [ ! -f wp-config-sample.php ]; then
     rm latest-ru_RU.tar.gz
 fi
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Создаём wp-config.php..."
 wp config create \
     --dbname=wordpress \
     --dbuser=wpuser \
@@ -95,6 +108,7 @@ wp config create \
     --skip-check \
     --allow-root
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Устанавливаем WordPress автоматически..."
 wp core install \
     --url=http://192.168.88.168 \
     --title="Мой личный блог" \
@@ -105,19 +119,22 @@ wp core install \
     --skip-email \
     --allow-root
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Настраиваем права..."
 chown -R www-data:www-data /var/www/html/wordpress
 chmod -R 755 /var/www/html/wordpress
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] WordPress установлен полностью автоматически!"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ WordPress установлен полностью автоматически!"
 
-# Prometheus + Node Exporter
+# МОНИТОРИНГ — Prometheus + Node Exporter + Grafana с дашбордом
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Prometheus + Node Exporter..."
 apt-get install -y prometheus prometheus-node-exporter
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/prometheus/prometheus.yml -o /etc/prometheus/prometheus.yml
+
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/prometheus/prometheus.yml \
+    -o /etc/prometheus/prometheus.yml
+
 systemctl restart prometheus prometheus-node-exporter
 systemctl enable prometheus prometheus-node-exporter
 
-# Grafana + ДАШБОРД
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка Grafana..."
 if ! dpkg -l | grep -q grafana; then
     wget -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
@@ -125,38 +142,53 @@ if ! dpkg -l | grep -q grafana; then
 fi
 systemctl enable --now grafana-server
 
-curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/grafana/provisioning/datasources/prometheus.yml -o /etc/grafana/provisioning/datasources/prometheus.yml
+curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/configs/grafana/provisioning/datasources/prometheus.yml \
+    -o /etc/grafana/provisioning/datasources/prometheus.yml
 
-# Создаём простой дашборд Node Exporter
+# Возвращаем дашборд
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Создаём дашборд Node Exporter в Grafana..."
 mkdir -p /etc/grafana/provisioning/dashboards
-cat > /etc/grafana/provisioning/dashboards/node-exporter.json << 'EOF'
+cat > /etc/grafana/provisioning/dashboards/otus-node-exporter.json << 'EOF'
 {
-  "title": "OTUS Node Exporter Simple",
-  "tags": ["node-exporter"],
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
   "panels": [
     {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [{ "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{instance}}" }],
       "title": "CPU Usage",
-      "type": "stat",
-      "targets": [{ "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)" }]
+      "type": "stat"
     },
     {
-      "title": "Memory Usage",
-      "type": "stat",
-      "targets": [{ "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes" }]
-    },
-    {
-      "title": "Load Average",
-      "type": "stat",
-      "targets": [{ "expr": "node_load1" }]
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "targets": [{ "expr": "node_memory_MemAvailable_bytes", "legendFormat": "{{instance}}" }],
+      "title": "Available Memory",
+      "type": "stat"
     }
-  ]
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "title": "OTUS Node Exporter Simple",
+  "uid": "otus-node-simple",
+  "version": 1
 }
 EOF
 
 systemctl restart grafana-server
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Дашборд Node Exporter добавлен"
 
-# ELK Stack
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка ELK Stack..."
+# ELK STACK
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Установка ELK Stack через Docker..."
 mkdir -p /opt/elk
 
 cat > /opt/elk/docker-compose.yml << 'EOF'
@@ -221,6 +253,7 @@ EOF
 cd /opt/elk
 docker compose down || true
 docker compose up -d
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ELK Stack запущен"
 
 # ФИНАЛЬНЫЙ ОТЧЁТ
 echo ""
