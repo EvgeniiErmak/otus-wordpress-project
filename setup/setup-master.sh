@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-master.sh — ПОЛНЫЙ ИСПРАВЛЕННЫЙ ВАРИАНТ ДЛЯ MASTER
+# setup/setup-master.sh — ПОЛНЫЙ ИСПРАВЛЕННЫЙ ВАРИАНТ (WordPress + Grafana + всё остальное)
 
 set -euo pipefail
 
@@ -7,7 +7,7 @@ source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates gnupg; do
     check_and_install "$pkg"
 done
@@ -20,7 +20,7 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== NGINX REVERSE PROXY ========================
+# ======================== NGINX ========================
 log "Настройка Nginx reverse proxy..."
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
@@ -28,17 +28,16 @@ ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# ======================== LAMP + MEMCACHED ========================
-log "Установка LAMP стека (Apache + PHP + Memcached + MySQL)..."
+# ======================== LAMP + MEMCACHED + MySQL ========================
+log "Установка LAMP + Memcached + MySQL..."
 apt-get install -y apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache на порт 8080
-log "Исправляем Apache ports.conf..."
+# Apache на 8080
+log "Настройка Apache..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
-
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -53,7 +52,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL MASTER ========================
+# MySQL Master
 log "Настройка MySQL Master..."
 download_config "configs/mysql/master.cnf" "/etc/mysql/mysql.conf.d/master.cnf"
 systemctl restart mysql
@@ -67,17 +66,17 @@ GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'%';
 CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'ReplPassword2026Strong!';
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
-" 
+"
 
-log "Привязка MySQL ко всем интерфейсам и открытие порта..."
 sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
 ufw allow 3306 || true
 
 # ======================== WORDPRESS ========================
-log "Установка файлов WordPress..."
+log "Установка WordPress файлов..."
+mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
-log "Выполняем ПОЛНОСТЬЮ АВТОМАТИЧЕСКУЮ установку WordPress..."
+log "Автоматическая установка WordPress (русский язык)..."
 auto_install_wordpress
 
 # ======================== PROMETHEUS + GRAFANA ========================
@@ -85,11 +84,9 @@ log "Настройка Prometheus + Node Exporter + Grafana..."
 check_and_install prometheus
 check_and_install prometheus-node-exporter
 
-# Prometheus config
 cat > /etc/prometheus/prometheus.yml << 'EOF'
 global:
   scrape_interval: 10s
-
 scrape_configs:
   - job_name: 'prometheus'
     static_configs:
@@ -114,7 +111,7 @@ enable_and_start_service grafana-server
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl restart grafana-server
 
-# ======================== ELK (Docker) ========================
+# ======================== ELK ========================
 log "Установка ELK через Docker..."
 mkdir -p /opt/elk
 cat > /opt/elk/docker-compose.yml << 'EOF'
@@ -122,24 +119,18 @@ version: '3.8'
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
-    container_name: elasticsearch
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - network.host=0.0.0.0
     ports:
       - "9200:9200"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
     volumes:
       - esdata:/usr/share/elasticsearch/data
     restart: unless-stopped
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.17.1
-    container_name: kibana
     ports:
       - "5601:5601"
     environment:
@@ -147,17 +138,6 @@ services:
       - SERVER_PUBLICBASEURL=http://192.168.88.168:5601
     depends_on:
       - elasticsearch
-    restart: unless-stopped
-
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.17.1
-    container_name: filebeat
-    user: "0:0"
-    command: ["filebeat", "-e", "--strict.perms=false"]
-    volumes:
-      - /var/log:/var/log:ro
-      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-    network_mode: "host"
     restart: unless-stopped
 
 volumes:
