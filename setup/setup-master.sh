@@ -1,10 +1,8 @@
 #!/bin/bash
-# setup/setup-master.sh — ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ MASTER (WordPress полностью автоматический)
-# НИЧЕГО НЕ СОКРАЩЕНО. Всё явно и по порядку.
+# setup/setup-master.sh — ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ (WP-CLI установлен + WordPress полностью автоматический)
 
 set -euo pipefail
 
-# ======================== ЗАГРУЗКА ОБЩИХ ФУНКЦИЙ ========================
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
 log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
@@ -23,15 +21,15 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose-plugin
 
-# ======================== NGINX REVERSE PROXY ========================
-log "Настройка Nginx как reverse proxy..."
+# ======================== NGINX ========================
+log "Настройка Nginx reverse proxy..."
 check_and_install nginx
 download_config "configs/nginx/reverse-proxy.conf" "/etc/nginx/sites-available/default"
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 enable_and_start_service nginx
 
-# ======================== LAMP СТЕК ========================
+# ======================== LAMP + MEMCACHED + MYSQL ========================
 log "Установка Apache + PHP 8.3 + Memcached + MySQL..."
 apt-get install -y apache2 \
     php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
@@ -68,11 +66,17 @@ GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'%';
 CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'ReplPassword2026Strong!';
 GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
 FLUSH PRIVILEGES;
-" 
+"
 
 log "MySQL Master настроен. Пользователи wpuser и repl созданы."
 
-# ======================== WORDPRESS — ПОЛНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА ========================
+# ======================== WP-CLI ========================
+log "Установка WP-CLI..."
+curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+chmod +x wp-cli.phar
+mv wp-cli.phar /usr/local/bin/wp
+
+# ======================== WORDPRESS ========================
 log "Установка файлов WordPress..."
 install_wordpress_files
 
@@ -88,7 +92,7 @@ wp config create \
     --force \
     --skip-check
 
-log "Устанавливаем WordPress (автоматически, без браузера)..."
+log "Устанавливаем WordPress автоматически..."
 wp core install \
     --url=http://192.168.88.168 \
     --title="Мой личный блог" \
@@ -98,13 +102,13 @@ wp core install \
     --locale=ru_RU \
     --skip-email
 
-log "Настраиваем права и завершаем установку WordPress..."
+log "Настраиваем права..."
 chown -R www-data:www-data /var/www/html/wordpress
 chmod -R 755 /var/www/html/wordpress
 
-log "✅ WordPress установлен полностью автоматически (русский язык + готовый сайт)!"
+log "✅ WordPress установлен полностью автоматически!"
 
-# ======================== МОНИТОРИНГ (Prometheus + Grafana) ========================
+# ======================== МОНИТОРИНГ ========================
 log "Настройка Prometheus + Node Exporter..."
 check_and_install prometheus prometheus-node-exporter
 download_config "configs/prometheus/prometheus.yml" "/etc/prometheus/prometheus.yml"
@@ -120,9 +124,10 @@ enable_and_start_service grafana-server
 download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
 systemctl restart grafana-server
 
-# ======================== ELK STACK (Docker) ========================
+# ======================== ELK ========================
 log "Установка ELK Stack через Docker..."
 mkdir -p /opt/elk
+
 cat > /opt/elk/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
@@ -197,22 +202,13 @@ echo "   URL:      http://192.168.88.168"
 echo "   Логин:    admin"
 echo "   Пароль:   AdminPassword2026Strong!"
 echo ""
-echo "Grafana:"
-echo "   URL:      http://192.168.88.168:3000"
-echo "   Логин:    admin"
-echo "   Пароль:   admin"
-echo ""
-echo "Kibana:"
-echo "   URL:      http://192.168.88.168:5601"
-echo ""
-echo "Elasticsearch:"
-echo "   URL:      http://192.168.88.168:9200"
+echo "Grafana:      http://192.168.88.168:3000   (admin / admin)"
+echo "Kibana:       http://192.168.88.168:5601"
+echo "Elasticsearch:http://192.168.88.168:9200"
 echo ""
 echo "MySQL:"
-echo "   wpuser     / WpPassword2026Strong!"
-echo "   repl       / ReplPassword2026Strong! (для slave)"
-echo ""
-echo "Проверьте метрики: curl http://192.168.88.168:9100/metrics"
+echo "   wpuser / WpPassword2026Strong!"
+echo "   repl  / ReplPassword2026Strong!"
 echo "=================================================================="
 
-log "Master восстановлен успешно с полностью автоматической установкой WordPress."
+log "Master восстановлен успешно."
