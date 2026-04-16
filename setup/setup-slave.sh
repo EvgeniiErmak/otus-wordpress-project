@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (порядок пакетов исправлен)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (фикс rsync + репликация)
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ MASTER_ROOT_PASSWORD="292799619531629514"
 
 log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
-# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
+# Базовые пакеты
 for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
     check_and_install "$pkg"
 done
@@ -24,36 +24,31 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# ======================== SSH КЛЮЧ ========================
-log "Настройка автоматического SSH-доступа к master..."
+# SSH ключ
+log "Настройка SSH-ключа к master..."
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
-log "✅ SSH ключ установлен на master"
+log "✅ SSH ключ установлен"
 
-# ======================== FIREWALL ========================
+# Firewall
 log "Настройка firewall..."
-ufw allow 22
-ufw allow 80
-ufw allow 8080
-ufw allow 9100
-ufw allow 3306
+ufw allow 22 80 8080 9100 3306 || true
 ufw --force enable || true
 
-# ======================== LAMP СТЕК ========================
+# LAMP стек
 log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
 apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache на порт 8080
-log "Исправляем Apache ports.conf..."
+# Apache
+log "Настройка Apache на порт 8080..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
-
 download_config "configs/apache/wordpress.conf" "/etc/apache2/sites-available/wordpress.conf"
 a2ensite wordpress.conf
 a2dissite 000-default.conf
@@ -68,13 +63,13 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# ======================== MySQL SLAVE ========================
+# MySQL Slave
 log "Настройка MySQL Slave..."
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql
 enable_and_start_service mysql
 
-log "Настройка репликации..."
+log "Запуск репликации..."
 mysql -e "
 STOP SLAVE;
 CHANGE MASTER TO
@@ -85,17 +80,19 @@ CHANGE MASTER TO
 START SLAVE;
 " 2>/dev/null || true
 
-sleep 10
+sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# ======================== WORDPRESS + СИНХРОНИЗАЦИЯ ========================
-log "Установка и синхронизация WordPress файлов..."
+# WordPress + синхронизация
+log "Установка WordPress файлов..."
+mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
+log "Настройка синхронизации файлов..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
-  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes" \
+  -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10" \
   root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
 chown -R www-data:www-data /var/www/html/wordpress
 echo "[$(date)] Синхронизация WP файлов выполнена" >> /var/log/wp-sync.log
@@ -105,15 +102,14 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-# ======================== MONITORING ========================
+# Node Exporter
 log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# ======================== FILEBEAT — ПРОСТОЙ ========================
-log "Filebeat — простой режим..."
+# Filebeat (простой)
+log "Filebeat простой режим..."
 mkdir -p /opt/filebeat
-
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
@@ -145,8 +141,6 @@ setup.ilm.enabled: false
 output.elasticsearch:
   hosts: ["http://192.168.88.168:9200"]
   index: "logs-slave-%{+yyyy.MM.dd}"
-
-logging.level: info
 EOF
 
 cd /opt/filebeat
@@ -154,32 +148,31 @@ docker compose down || true
 docker compose up -d
 
 # Генерация логов
-log "Генерируем 800 тестовых логов..."
+log "Генерируем тестовые логи..."
 for i in {1..800}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
     echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
     echo "[$ts] TEST MySQL slave #$i" >> /var/log/mysql/error.log
-    echo "[$ts] TEST WP-sync slave #$i" >> /var/log/wp-sync.log
 done
 
 sleep 90
 
 # Index Pattern
-log "Создаём Index Pattern в Kibana..."
+log "Создаём Index Pattern..."
 curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" \
   -H 'kbn-xsrf: true' \
   -H 'Content-Type: application/json' \
   -d '{"attributes":{"title":"logs-*","timeFieldName":"@timestamp"}}' || true
 
-# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
+# Финальный отчёт
 echo ""
 echo "=================================================================="
 echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО!"
 echo "=================================================================="
-echo "WordPress:                 http://192.168.88.168"
-echo "Node Exporter:             http://192.168.88.167:9100/metrics"
-echo "Kibana:                    http://192.168.88.168:5601  → logs-*"
+echo "WordPress:     http://192.168.88.168"
+echo "Node Exporter: http://192.168.88.167:9100/metrics"
+echo "Kibana:        http://192.168.88.168:5601  (logs-*)"
 echo ""
 echo "Проверь индексы:"
 echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
