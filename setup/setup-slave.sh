@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (Apache устанавливается ПЕРЕД конфигами)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (Apache устанавливается ПЕРЕД записью конфигов)
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ MASTER_ROOT_PASSWORD="292799619531629514"
 
 log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
 
-# Базовые пакеты
+# ======================== БАЗОВЫЕ ПАКЕТЫ ========================
 for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpass ufw; do
     check_and_install "$pkg"
 done
@@ -24,27 +24,27 @@ if ! command -v docker &> /dev/null; then
 fi
 check_and_install docker-compose
 
-# SSH ключ
-log "Настройка SSH-ключа к master..."
+# ======================== SSH КЛЮЧ ========================
+log "Настройка автоматического SSH-доступа к master..."
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
 sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
-log "✅ SSH ключ установлен"
+log "✅ SSH ключ установлен на master"
 
-# Firewall
+# ======================== FIREWALL ========================
 log "Настройка firewall..."
 ufw allow 22 80 8080 9100 3306 || true
 ufw --force enable || true
 
-# ======================== LAMP СТЕК (Apache ПЕРЕД конфигами!) ========================
+# ======================== LAMP СТЕК ========================
 log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
 apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
     php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache на порт 8080
+# Apache на 8080 (теперь после установки пакета!)
 log "Настройка Apache на порт 8080..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
@@ -64,7 +64,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
-# MySQL Slave
+# ======================== MySQL SLAVE ========================
 log "Настройка MySQL Slave..."
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql
@@ -84,12 +84,11 @@ START SLAVE;
 sleep 12
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
-# WordPress + синхронизация
+# ======================== WORDPRESS + СИНХРОНИЗАЦИЯ ========================
 log "Установка WordPress файлов..."
 mkdir -p /var/www/html/wordpress
 install_wordpress_files
 
-log "Настройка синхронизации файлов..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
@@ -103,13 +102,13 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
-# Node Exporter
+# ======================== MONITORING ========================
 log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# Filebeat простой
-log "Filebeat простой режим..."
+# ======================== FILEBEAT ========================
+log "Filebeat — простой режим..."
 mkdir -p /opt/filebeat
 
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
@@ -161,13 +160,13 @@ done
 sleep 90
 
 # Index Pattern
-log "Создаём Index Pattern..."
+log "Создаём Index Pattern в Kibana..."
 curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" \
   -H 'kbn-xsrf: true' \
   -H 'Content-Type: application/json' \
   -d '{"attributes":{"title":"logs-*","timeFieldName":"@timestamp"}}' || true
 
-# Финальный отчёт
+# ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
 echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО!"
