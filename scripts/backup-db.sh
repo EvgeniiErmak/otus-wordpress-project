@@ -17,6 +17,7 @@ BINLOG_INFO=$(mysql -e "SHOW MASTER STATUS\G" 2>/dev/null | grep -E "File|Positi
 
 if [ -n "$BINLOG_INFO" ]; then
     echo "$BINLOG_INFO" > "$BINLOG_FILE"
+    # Вывод в stdout для автоматической проверки (требование ТЗ)
     echo "📊 Binlog Position:"
     echo "$BINLOG_INFO"
 else
@@ -37,7 +38,7 @@ if [ -n "$TABLES" ]; then
     log "✅ Бэкап создан: $BACKUP_FILE (размер: $SIZE)"
     log "📍 Позиция бинлога сохранена в $BINLOG_FILE"
     
-    # Вывод для автоматической проверки (требование ТЗ)
+    # Финальный вывод для проверки
     echo "📦 BACKUP_OK: $BACKUP_FILE"
     echo "📊 BINLOG_INFO:"
     cat "$BINLOG_FILE"
