@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ВЕРСИЯ: гарантированное выполнение до конца
+# setup/setup-slave.sh — ПОЛНАЯ АВТОМАТИЗАЦИЯ С ИСПРАВЛЕНИЯМИ
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ for pkg in curl wget git unzip ca-certificates gnupg openssh-client rsync sshpas
     check_and_install "$pkg"
 done
 
-# ======================== 2. DOCKER ========================
+# ======================== 2. DOCKER + COMPOSE V2 ========================
 log "Установка Docker..."
 if ! command -v docker &> /dev/null; then
     log "Устанавливаем Docker..."
@@ -25,7 +25,7 @@ if ! command -v docker &> /dev/null; then
     systemctl enable --now docker
 fi
 
-# Установка Docker Compose v2 (плагин), а не устаревшего docker-compose
+# Установка ТОЛЬКО Docker Compose v2 plugin
 if ! docker compose version &>/dev/null; then
     log "Устанавливаем Docker Compose v2 plugin..."
     apt-get install -y docker-compose-plugin || true
@@ -75,53 +75,73 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached || true
 enable_and_start_service memcached
 
-# ======================== 6. MySQL SLAVE ========================
+# ======================== 6. MySQL SLAVE — С ИСПРАВЛЕНИЯМИ ========================
 log "Настройка MySQL Slave..."
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql || true
 enable_and_start_service mysql
 
+# Ждём доступности MySQL
+for i in {1..30}; do
+    if mysql -e "SELECT 1;" &>/dev/null; then
+        log "✅ MySQL доступен"
+        break
+    fi
+    sleep 2
+done
+
 log "Запуск репликации..."
 mysql -e "
 STOP SLAVE;
+RESET SLAVE ALL;
 CHANGE MASTER TO
   MASTER_HOST='$MASTER_IP',
   MASTER_USER='repl',
   MASTER_PASSWORD='$REPL_PASSWORD',
-  MASTER_AUTO_POSITION=1;
+  MASTER_AUTO_POSITION=1,
+  MASTER_CONNECT_RETRY=10;
 START SLAVE;
 " 2>/dev/null || true
 
-sleep 12
-mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
+# Ждём подключения IO-треда репликации
+log "Ожидание подключения репликации..."
+for i in {1..60}; do
+    IO_STATE=$(mysql -N -e "SHOW SLAVE STATUS\G;" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}' || echo "")
+    if [ "$IO_STATE" = "Yes" ]; then
+        log "✅ Slave IO thread подключён"
+        break
+    fi
+    sleep 2
+done
+
+# Финальная проверка
+mysql -e "SHOW SLAVE STATUS\G;" 2>/dev/null | grep -E "Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master|Last_IO_Error" || true
 
 # ======================== 7. WORDPRESS — RSYNC С MASTER ========================
 log "Подготовка директории WordPress на slave..."
 rm -rf /var/www/html/wordpress/* 2>/dev/null || true
 mkdir -p /var/www/html/wordpress
 
-log "Настройка синхронизации файлов (ТОЛЬКО WordPress с master)..."
+log "Настройка синхронизации файлов..."
 cat > /usr/local/bin/sync-wp-files.sh << 'EOF'
 #!/bin/bash
 rsync -avz --delete --exclude=wp-config.php \
   -e "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15" \
   root@192.168.88.168:/var/www/html/wordpress/ /var/www/html/wordpress/ || true
-
 chown -R www-data:www-data /var/www/html/wordpress
 echo "[$(date)] Синхронизация WP файлов выполнена" >> /var/log/wp-sync.log
 EOF
-
 chmod +x /usr/local/bin/sync-wp-files.sh
 
-log "Выполняем первую синхронизацию WordPress файлов с master..."
+log "Выполняем первую синхронизацию..."
 /usr/local/bin/sync-wp-files.sh || true
 
-# Добавляем в cron — ИСПРАВЛЕНО: корректная обработка пустого crontab
+# Добавляем в cron — БЕЗОПАСНЫЙ ВАРИАНТ
 log "Добавляем задачу в cron..."
 if crontab -l 2>/dev/null | grep -q "sync-wp-files.sh" 2>/dev/null; then
     log "✅ Cron-задача уже существует"
 else
-    (crontab -l 2>/dev/null || echo "") | { cat; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh"; } | crontab - || true
+    (crontab -l 2>/dev/null || echo ""; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab - || true
     log "✅ Cron-задача добавлена"
 fi
 
@@ -158,10 +178,8 @@ filebeat.inputs:
     - /var/log/apache2/*.log
     - /var/log/mysql/*.log
     - /var/log/wp-sync.log
-
 setup.template.enabled: false
 setup.ilm.enabled: false
-
 output.elasticsearch:
   hosts: ["http://192.168.88.168:9200"]
   index: "logs-slave-%{+yyyy.MM.dd}"
@@ -171,9 +189,9 @@ cd /opt/filebeat
 docker compose down || true
 docker compose up -d || true
 
-# ======================== 10. ТЕСТОВЫЕ ЛОГИ + INDEX PATTERN ========================
+# ======================== 10. ТЕСТОВЫЕ ЛОГИ (100 вместо 800) ========================
 log "Генерируем тестовые логи для проверки..."
-for i in {1..800}; do
+for i in {1..100}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$ts] TEST Nginx slave #$i" >> /var/log/nginx/access.log
     echo "[$ts] TEST Apache slave #$i" >> /var/log/apache2/access.log
@@ -182,7 +200,7 @@ for i in {1..800}; do
 done
 
 log "Ожидание отправки логов в Elasticsearch..."
-sleep 90
+sleep 30
 
 log "Создаём Index Pattern в Kibana..."
 curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" \
@@ -202,5 +220,4 @@ echo ""
 echo "Проверь индексы:"
 echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
 echo "=================================================================="
-
 log "Slave восстановлен успешно."
