@@ -1,6 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ПОЛНЫЙ ФИНАЛЬНЫЙ ВАРИАНТ ДЛЯ SLAVE
-# Всё автоматом: LAMP, MySQL репликация, WordPress, rsync sync, Node Exporter, Filebeat (простой индекс)
+# setup/setup-slave.sh — ИСПРАВЛЕННАЯ ФИНАЛЬНАЯ ВЕРСИЯ (порядок пакетов исправлен)
 
 set -euo pipefail
 
@@ -32,7 +31,6 @@ if [ ! -f /root/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa -q
 fi
 ssh-keyscan -H $MASTER_IP >> /root/.ssh/known_hosts 2>/dev/null || true
-
 sshpass -p "$MASTER_ROOT_PASSWORD" ssh-copy-id -o StrictHostKeyChecking=no -f root@$MASTER_IP || true
 log "✅ SSH ключ установлен на master"
 
@@ -45,11 +43,13 @@ ufw allow 9100
 ufw allow 3306
 ufw --force enable || true
 
-# ======================== NGINX + APACHE + PHP + MEMCACHED ========================
-log "Установка Nginx + Apache + PHP + Memcached..."
-check_and_install nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached
+# ======================== LAMP СТЕК ========================
+log "Установка Nginx + Apache + PHP + Memcached + MySQL..."
+apt-get install -y nginx apache2 php8.3 php8.3-fpm php8.3-mysql php8.3-memcached \
+    php8.3-curl php8.3-gd php8.3-mbstring php8.3-xml php8.3-zip memcached mysql-server
 
-# Apache на 8080
+# Apache на порт 8080
+log "Исправляем Apache ports.conf..."
 cat > /etc/apache2/ports.conf << 'EOF'
 Listen 8080
 EOF
@@ -63,13 +63,13 @@ systemctl restart apache2
 enable_and_start_service apache2 nginx
 
 # Memcached
+log "Настройка Memcached..."
 sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached
 enable_and_start_service memcached
 
 # ======================== MySQL SLAVE ========================
 log "Настройка MySQL Slave..."
-check_and_install mysql-server
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql
 enable_and_start_service mysql
@@ -85,7 +85,7 @@ CHANGE MASTER TO
 START SLAVE;
 " 2>/dev/null || true
 
-sleep 8
+sleep 10
 mysql -e "SHOW SLAVE STATUS\G;" | grep -E "Slave_IO_Running|Slave_SQL_Running" || true
 
 # ======================== WORDPRESS + СИНХРОНИЗАЦИЯ ========================
@@ -103,8 +103,6 @@ EOF
 
 chmod +x /usr/local/bin/sync-wp-files.sh
 /usr/local/bin/sync-wp-files.sh || true
-
-# Cron каждые 5 минут
 (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/sync-wp-files.sh") | crontab -
 
 # ======================== MONITORING ========================
@@ -112,9 +110,8 @@ log "Node Exporter..."
 check_and_install prometheus-node-exporter
 enable_and_start_service prometheus-node-exporter
 
-# ======================== FILEBEAT — ПРОСТОЙ ВАРИАНТ ========================
-log "Filebeat — простой режим без data stream..."
-
+# ======================== FILEBEAT — ПРОСТОЙ ========================
+log "Filebeat — простой режим..."
 mkdir -p /opt/filebeat
 
 cat > /opt/filebeat/docker-compose.yml << 'EOF'
@@ -141,8 +138,6 @@ filebeat.inputs:
     - /var/log/apache2/*.log
     - /var/log/mysql/*.log
     - /var/log/wp-sync.log
-  fields:
-    server: otus-slave
 
 setup.template.enabled: false
 setup.ilm.enabled: false
@@ -180,16 +175,13 @@ curl -s -X POST "http://$MASTER_IP:5601/api/saved_objects/index-pattern/logs-*" 
 # ======================== ФИНАЛЬНЫЙ ОТЧЁТ ========================
 echo ""
 echo "=================================================================="
-echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО (полностью автоматически)"
+echo "✅ SLAVE УСТАНОВЛЕН УСПЕШНО!"
 echo "=================================================================="
 echo "WordPress:                 http://192.168.88.168"
-echo "MySQL Slave:               репликация должна быть активна"
-echo "Автосинхронизация файлов:  каждые 5 минут (/usr/local/bin/sync-wp-files.sh)"
 echo "Node Exporter:             http://192.168.88.167:9100/metrics"
-echo "Kibana + логи:             http://192.168.88.168:5601"
-echo "   → Выберите Index Pattern: logs-*"
+echo "Kibana:                    http://192.168.88.168:5601  → logs-*"
 echo ""
-echo "Проверь индексы командой:"
+echo "Проверь индексы:"
 echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
 echo "=================================================================="
 
