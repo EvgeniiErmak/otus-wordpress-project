@@ -164,61 +164,97 @@ EOF
 systemctl restart prometheus prometheus-node-exporter || true
 enable_and_start_service prometheus prometheus-node-exporter
 
-# ======================== 8. GRAFANA + ДАШБОРД ========================
-log "Установка Grafana..."
+# ======================== 8. GRAFANA + ДАШБОРД (DOCKER) ========================
+log "Установка Grafana через Docker..."
 
-# Добавляем репозиторий Grafana (быстрее и надежнее чем wget)
-if ! dpkg -l | grep -q grafana; then
-    log "Добавляем GPG ключ Grafana..."
-    wget -q -O - https://packages.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/grafana.gpg > /dev/null
-    
-    log "Добавляем репозиторий Grafana..."
-    echo "deb https://packages.grafana.com/oss/deb stable main" | tee -a /etc/apt/sources.list.d/grafana.list
-    
-    log "Устанавливаем Grafana..."
-    apt-get update -qq
-    apt-get install -y grafana || {
-        log "⚠️ Установка из репозитория не удалась, пробуем wget..."
-        wget --timeout=300 --tries=3 -q https://dl.grafana.com/oss/release/grafana_11.5.2_amd64.deb
-        dpkg -i grafana_11.5.2_amd64.deb || apt-get install -f -y
-        rm -f grafana_11.5.2_amd64.deb
-    }
-fi
+mkdir -p /opt/grafana
+cd /opt/grafana
 
-enable_and_start_service grafana-server
+# Создаем docker-compose.yml для Grafana
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  grafana:
+    image: grafana/grafana-oss:11.5.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning
+      - ./dashboards:/var/lib/grafana/dashboards
+    restart: unless-stopped
+    network_mode: "host"
 
-download_config "configs/grafana/provisioning/datasources/prometheus.yml" "/etc/grafana/provisioning/datasources/prometheus.yml"
+volumes:
+  grafana-storage:
+EOF
 
-mkdir -p /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards
-chown -R grafana:grafana /var/lib/grafana /etc/grafana
+# Создаем структуру папок
+mkdir -p provisioning/datasources provisioning/dashboards dashboards
 
-cat > /etc/grafana/provisioning/dashboards/otus-simple.yml << 'EOF'
+# Prometheus datasource
+cat > provisioning/datasources/prometheus.yml << 'EOF'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+EOF
+
+# Dashboard provisioning
+cat > provisioning/dashboards/otus-simple.yml << 'EOF'
 apiVersion: 1
 providers:
   - name: 'default'
     orgId: 1
     folder: ''
     type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
     options:
       path: /var/lib/grafana/dashboards
 EOF
 
-cat > /var/lib/grafana/dashboards/otus-node-simple.json << 'EOF'
+# Сам дашборд OTUS Node Exporter Simple
+cat > dashboards/otus-node-simple.json << 'EOF'
 {
   "title": "OTUS Node Exporter Simple",
   "panels": [
-    {"type":"stat","title":"CPU Usage %","targets":[{"expr":"100 - avg(irate(node_cpu_seconds_total{mode=\"idle\",job=\"node_exporter\"}[5m])) * 100"}]},
-    {"type":"stat","title":"Used RAM (GB)","targets":[{"expr":"(node_memory_MemTotal_bytes{job=\"node_exporter\"} - node_memory_MemAvailable_bytes{job=\"node_exporter\"}) / 1024 / 1024 / 1024"}]},
-    {"type":"stat","title":"System Load 5m","targets":[{"expr":"node_load5{job=\"node_exporter\"}"}]},
-    {"type":"stat","title":"Uptime (days)","targets":[{"expr":"(node_time_seconds{job=\"node_exporter\"} - node_boot_time_seconds{job=\"node_exporter\"}) / 86400"}]}
+    {"type":"stat","title":"CPU Usage %","targets":[{"expr":"100 - avg(irate(node_cpu_seconds_total{mode=\"idle\",job=\"node_exporter\"}[5m])) * 100"}],"gridPos":{"h":4,"w":6,"x":0,"y":0}},
+    {"type":"stat","title":"Used RAM (GB)","targets":[{"expr":"(node_memory_MemTotal_bytes{job=\"node_exporter\"} - node_memory_MemAvailable_bytes{job=\"node_exporter\"}) / 1024 / 1024 / 1024"}],"gridPos":{"h":4,"w":6,"x":6,"y":0}},
+    {"type":"stat","title":"System Load 5m","targets":[{"expr":"node_load5{job=\"node_exporter\"}"}],"gridPos":{"h":4,"w":6,"x":12,"y":0}},
+    {"type":"stat","title":"Uptime (days)","targets":[{"expr":"(node_time_seconds{job=\"node_exporter\"} - node_boot_time_seconds{job=\"node_exporter\"}) / 86400"}],"gridPos":{"h":4,"w":6,"x":18,"y":0}}
   ],
-  "time":{"from":"now-1h","to":"now"}
+  "time":{"from":"now-1h","to":"now"},
+  "refresh":"10s",
+  "schemaVersion":39,
+  "version":1
 }
 EOF
 
-systemctl restart grafana-server || true
-curl -X POST http://localhost:9090/-/reload || true
-sleep 5
+# Запускаем Grafana
+docker compose down || true
+docker compose up -d
+
+# Ждем запуска
+log "Ожидание запуска Grafana..."
+for i in {1..30}; do
+    if curl -s http://localhost:3000/api/health | grep -q "committed"; then
+        log "✅ Grafana запущена"
+        break
+    fi
+    sleep 2
+done
+
 log "✅ Grafana + дашборд настроены"
 
 # ======================== 10. ELK STACK ========================
