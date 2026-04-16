@@ -145,6 +145,12 @@ else
     log "✅ Cron-задача добавлена"
 fi
 
+# ======================== 7.1. BACKUP SCRIPT ========================
+log "Установка скрипта бэкапа БД..."
+download_config "scripts/backup-db.sh" "/usr/local/bin/backup-db.sh"
+chmod +x /usr/local/bin/backup-db.sh
+log "✅ Скрипт бэкапа установлен"
+
 # ======================== 8. NODE EXPORTER ========================
 log "Установка Node Exporter..."
 check_and_install prometheus-node-exporter
