@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup/setup-slave.sh — ПОЛНАЯ АВТОМАТИЗАЦИЯ С ИСПРАВЛЕНИЯМИ
+# setup/setup-slave.sh — Развертывание Slave Node
 
 set -euo pipefail
 
@@ -9,7 +9,7 @@ MASTER_IP="192.168.88.168"
 REPL_PASSWORD="ReplPassword2026Strong!"
 MASTER_ROOT_PASSWORD="292799619531629514"
 
-log "=== ФИНАЛЬНАЯ АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE (192.168.88.167) ==="
+log "=== АВТОМАТИЧЕСКАЯ УСТАНОВКА НА SLAVE ==="
 
 # ======================== 1. БАЗОВЫЕ ПАКЕТЫ ========================
 log "Установка базовых пакетов..."
@@ -25,7 +25,7 @@ if ! command -v docker &> /dev/null; then
     systemctl enable --now docker
 fi
 
-# Установка ТОЛЬКО Docker Compose v2 plugin
+# Установка Docker Compose v2 plugin
 if ! docker compose version &>/dev/null; then
     log "Устанавливаем Docker Compose v2 plugin..."
     apt-get install -y docker-compose-plugin || true
@@ -75,7 +75,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached || true
 enable_and_start_service memcached
 
-# ======================== 6. MySQL SLAVE — С ИСПРАВЛЕНИЯМИ ========================
+# ======================== 6. MySQL SLAVE ========================
 log "Настройка MySQL Slave..."
 download_config "configs/mysql/slave.cnf" "/etc/mysql/mysql.conf.d/slave.cnf"
 systemctl restart mysql || true
@@ -136,7 +136,7 @@ chmod +x /usr/local/bin/sync-wp-files.sh
 log "Выполняем первую синхронизацию..."
 /usr/local/bin/sync-wp-files.sh || true
 
-# Добавляем в cron — БЕЗОПАСНЫЙ ВАРИАНТ
+# Добавляем задачу в cron
 log "Добавляем задачу в cron..."
 if crontab -l 2>/dev/null | grep -q "sync-wp-files.sh" 2>/dev/null; then
     log "✅ Cron-задача уже существует"
@@ -195,7 +195,7 @@ cd /opt/filebeat
 docker compose down || true
 docker compose up -d || true
 
-# ======================== 10. ТЕСТОВЫЕ ЛОГИ (100 вместо 800) ========================
+# ======================== 10. ТЕСТОВЫЕ ЛОГИ (100 штук) ========================
 log "Генерируем тестовые логи для проверки..."
 for i in {1..100}; do
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -205,7 +205,7 @@ for i in {1..100}; do
     echo "[$ts] TEST WP-sync slave #$i" >> /var/log/wp-sync.log
 done
 
-log "Ожидание отправки логов в Elasticsearch..."
+log "Ожидание отправки логов в Elasticsearch. НЕ ПРЕРЫВАЙТЕ ВЫПОЛНЕНИЕ СКРИПТА!..."
 sleep 30
 
 log "Создаём Index Pattern в Kibana..."
@@ -222,8 +222,5 @@ echo "=================================================================="
 echo "WordPress:     http://192.168.88.168"
 echo "Node Exporter: http://192.168.88.167:9100/metrics"
 echo "Kibana:        http://192.168.88.168:5601  (выберите logs-*)"
-echo ""
-echo "Проверь индексы:"
-echo "   curl -s http://192.168.88.168:9200/_cat/indices/logs*?v"
 echo "=================================================================="
 log "Slave восстановлен успешно."

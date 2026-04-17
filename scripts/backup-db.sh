@@ -11,13 +11,13 @@ chmod 700 "$BACKUP_DIR"
 
 log "=== Создание потабличного бэкапа БД со slave ==="
 
-# Получаем текущую позицию бинлога ДО бэкапа (требование ТЗ п.6)
+# Получаем текущую позицию бинлога ДО бэкапа
 log "📍 Получаем позицию бинлога..."
 BINLOG_INFO=$(mysql -e "SHOW MASTER STATUS\G" 2>/dev/null | grep -E "File|Position")
 
 if [ -n "$BINLOG_INFO" ]; then
     echo "$BINLOG_INFO" > "$BINLOG_FILE"
-    # Вывод в stdout для автоматической проверки (требование ТЗ)
+    # Вывод в stdout для автоматической проверки
     echo "📊 Binlog Position:"
     echo "$BINLOG_INFO"
 else

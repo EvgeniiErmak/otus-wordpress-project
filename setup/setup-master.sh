@@ -1,11 +1,11 @@
 #!/bin/bash
-# setup/setup-master.sh — ПОЛНАЯ АВТОМАТИЗАЦИЯ С ИСПРАВЛЕНИЯМИ
+# setup/setup-master.sh — Развертывание Master Node
 
 set -euo pipefail
 
 source <(curl -sSL https://raw.githubusercontent.com/EvgeniiErmak/otus-wordpress-project/main/setup/common-functions.sh)
 
-log "=== ФИНАЛЬНАЯ УСТАНОВКА НА MASTER (192.168.88.168) ==="
+log "=== АВТОМАТИЧЕСКАЯ УСТАНОВКА НА MASTER ==="
 
 # ======================== 1. БАЗОВЫЕ ПАКЕТЫ ========================
 log "Установка базовых пакетов..."
@@ -21,7 +21,7 @@ if ! command -v docker &> /dev/null; then
     systemctl enable --now docker
 fi
 
-# Установка ТОЛЬКО Docker Compose v2 plugin (не устанавливать docker-compose v1)
+# Установка Docker Compose v2 plugin
 if ! docker compose version &>/dev/null; then
     log "Устанавливаем Docker Compose v2 plugin..."
     apt-get install -y docker-compose-plugin || true
@@ -62,7 +62,7 @@ sed -i 's/^-l 127.0.0.1/-l 0.0.0.0/' /etc/memcached.conf 2>/dev/null || true
 systemctl restart memcached || true
 enable_and_start_service memcached
 
-# ======================== 5. MySQL MASTER — С ИСПРАВЛЕНИЯМИ ========================
+# ======================== 5. MySQL MASTERИ ========================
 log "Настройка MySQL Master..."
 
 # Гарантируем bind-address = 0.0.0.0 для репликации
